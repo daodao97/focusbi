@@ -275,29 +275,45 @@ ai:
 
 **客户端配置**:
 
-Claude Code (`.mcp.json`):
+Claude Code 一键添加:
+
+```bash
+claude mcp add --scope local --transport http focusbi http://127.0.0.1:8099/mcp \
+  --header "Authorization: Bearer fbt_xxxxx"
+```
+
+团队共享配置可写项目根目录 `.mcp.json`, 令牌通过环境变量传入:
 
 ```json
 {
   "mcpServers": {
     "focusbi": {
+      "type": "http",
       "url": "http://127.0.0.1:8099/mcp",
-      "headers": { "Authorization": "Bearer fbt_xxxxx" }
+      "headers": { "Authorization": "Bearer ${FOCUSBI_TOKEN}" }
     }
   }
 }
 ```
 
-Codex (`~/.codex/config.toml`, 令牌经环境变量传入):
+启动 Claude Code 前 `export FOCUSBI_TOKEN="fbt_xxxxx"`。
+
+Codex 一键添加:
+
+```bash
+codex mcp add focusbi --url http://127.0.0.1:8099/mcp \
+  --bearer-token-env-var FOCUSBI_TOKEN
+```
+
+令牌通过环境变量传入: `export FOCUSBI_TOKEN="fbt_xxxxx"`。
+
+也可以手写 `~/.codex/config.toml`:
 
 ```toml
 [mcp_servers.focusbi]
 url = "http://127.0.0.1:8099/mcp"
 bearer_token_env_var = "FOCUSBI_TOKEN"
 ```
-
-启动前 `export FOCUSBI_TOKEN="fbt_xxxxx"`; 或用 CLI:
-`codex mcp add focusbi --url http://127.0.0.1:8099/mcp --bearer-token-env-var FOCUSBI_TOKEN`。
 
 实现: `internal/mcpserver/` (server/tools/auth), 接入 `api/mcp.go`; 令牌持久层
 `dao/api_token.go` + 迁移 `00007`; REST 管理 `api/api_token.go` (`/api/token`)。

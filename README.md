@@ -1,20 +1,32 @@
 # FocusBI
 
-> 面向工程团队和数据团队的 SQL 报表平台。用一段模板完成取数、筛选、图表、表格、分享、订阅和 AI 辅助开发。
+> 面向工程团队和数据团队的 SQL 报表平台。通过 MCP 让 Codex / Claude Code 自动探库、写报表、试跑和发布。
 
 FocusBI 不是拖拽式 BI, 也不是只能贴一段 SQL 的查询页面。它把报表定义成一份可版本化的
-**SQL 模板**: SQL 负责口径, 注解负责展示, 脚本负责复杂编排, AI/MCP 负责加速开发。
+**SQL 模板**: SQL 负责口径, 注解负责展示, 脚本负责复杂编排, MCP/AI 负责自动化开发。
 
 适合这类场景:
 
+- 希望在 Codex / Claude Code 等 AI 工具里直接探库、写模板、试跑、创建和发布报表。
 - 业务口径必须可审查、可复制、可版本管理。
 - 同一份数据要生成多个图表和表格, 且指标口径不能漂。
 - 报表需要公开分享、权限隔离、定时推送和异常提醒。
-- 希望在 Codex / Claude Code 等 AI 工具里直接探库、写模板、试跑、发布。
 
 ## 核心特色
 
-### 1. SQL 模板即报表
+### 1. MCP 自动化开发报表
+
+FocusBI 内置 MCP 服务, AI 工具拿到 API Token 后可以直接完成报表开发链路:
+
+- 探数据源、查表结构、看字段样例。
+- 读取已有报表模板和版本。
+- 编写 SQL 模板并调用 `preview_template` 试跑。
+- 创建报表、更新草稿、发布版本。
+
+这让报表开发可以从“人手写 SQL + 页面里反复调试”, 变成“AI 在受控权限内探库、生成、试跑、修正、发布”。
+所有 MCP 操作都继承用户 RBAC 权限, 不绕过数据源和报表授权。
+
+### 2. SQL 模板即报表
 
 一份报表就是一段文本: 过滤器、SQL、展示注解、列配置都写在一起。
 
@@ -38,7 +50,7 @@ ORDER BY day;
 
 模板可以放进 Git 做 code review, 也可以在页面里编辑、预览、发布和回滚。
 
-### 2. 一次取数, 多种展示
+### 3. 一次取数, 多种展示
 
 普通 SQL block 和脚本都可以产出图表/表格。需要复用同一份数据时, 可以把前置 block 当作
 数据源引用:
@@ -71,7 +83,7 @@ result.table({
 
 这能减少复制 SQL 带来的口径不一致问题。
 
-### 3. 面向复杂报表的数据管线
+### 4. 面向复杂报表的数据管线
 
 内置常见报表变换, 尽量少写重复 CTE:
 
@@ -83,16 +95,16 @@ result.table({
 
 SQL block 和 `#!SCRIPT query()` 只允许单条只读 `SELECT/WITH`, 并有可配置查询超时, 适合给团队安全使用。
 
-### 4. AI 不是聊天玩具, 是报表开发工具
+### 5. AI 不是聊天玩具, 是报表开发工具
 
 FocusBI 内置两条 AI 工作流:
 
 - **页面内 AI 修改模板**: 流式说明 + SEARCH/REPLACE 补丁 + 即时预览。
-- **MCP 服务**: Codex / Claude Code 可通过 API Token 探数据源、查表结构、试跑模板、创建和发布报表。
+- **MCP 自动化开发**: Codex / Claude Code 可通过 API Token 探数据源、查表结构、试跑模板、创建和发布报表。
 
 AI 的所有操作都继承用户 RBAC 权限, 不绕过报表和数据源授权。
 
-### 5. 从报表开发到交付闭环
+### 6. 从报表开发到交付闭环
 
 - 多数据源: MySQL / PostgreSQL / SQLite, MySQL 支持 SSH 隧道。
 - 报表开发版 / 发布版分离, 支持版本历史和回滚。
@@ -221,62 +233,57 @@ SELECT channel, SUM(amount) AS total FROM sales GROUP BY channel;
 - 完整语法 (注解 / 列配置 / 图表 / 透视 / 合并 / 脚本区块 / 宏) 见
   [`docs/SYNTAX.md`](docs/SYNTAX.md)。
 
-## 架构概览
-
-```
-cmd/main.go            程序入口 (xgo/xapp 装配: 配置 -> redis -> dao -> Gin)
-conf/                  配置 (数据库 / redis / AI / 站点)
-dao/                   各表数据访问 (report / dsn / user / role / subscription …)
-db/migrations/         goose 迁移文件 (启动自动执行, 仅 MySQL)
-internal/engine/       报表模板引擎 (解析 / 过滤器 / 宏 / 数据管线 / 图表)  ← 核心
-internal/datasource/   多数据源连接池 + SSH 隧道 + 原始查询
-internal/ai/           AI 对话改模板 (Eino: Claude / OpenAI)
-internal/subscription/ 订阅推送 (渲染 + 飞书/企微 webhook + 条件告警)
-internal/auth/         登录 / JWT / RBAC 权限
-job/                   xcron 调度 (每分钟扫描订阅, 分布式锁)
-api/                   REST 接口 (setup.go) + 内嵌前端挂载 (ui.go)
-web/                   Vue3 + Vite 多页前端 (index.html 控制台 / view.html 查看页)
-docs/SYNTAX.md         报表模板语法 (唯一权威, 同时是 AI system prompt 与应用内文档)
-docs/REPORT.md         架构与运维说明
-```
-
-报表执行的核心是 `internal/engine` 的 `Runner.Run(content, params)`: 解析模板 →
-按过滤器生成宏并替换进 SQL → 执行查询 → 跑数据管线 (过滤/排序/透视/合并/波动…) →
-产出 `Result` (过滤器定义 + 区块) 交前端渲染。详见
-[`docs/REPORT.md`](docs/REPORT.md) 与 [`CLAUDE.md`](CLAUDE.md)。
-
 ## 在 AI 工具中开发报表 (MCP)
 
 系统在 `/mcp` 暴露 MCP 服务 (Streamable HTTP)。先在控制台「API 令牌」生成一个令牌
 (`fbt_...`), 再配置到 AI 客户端。
 
-**Claude Code** (`.mcp.json` 或 `claude_desktop_config.json`):
+**Claude Code** 一键添加:
+
+```bash
+claude mcp add --scope local --transport http focusbi http://127.0.0.1:8099/mcp \
+  --header "Authorization: Bearer fbt_xxxxx"
+```
+
+这个命令写入本机 `~/.claude.json`, 只在当前项目生效, 适合放令牌。团队共享配置可写项目根目录
+`.mcp.json`, 令牌通过环境变量传入:
 
 ```json
 {
   "mcpServers": {
     "focusbi": {
+      "type": "http",
       "url": "http://127.0.0.1:8099/mcp",
-      "headers": { "Authorization": "Bearer fbt_xxxxx" }
+      "headers": { "Authorization": "Bearer ${FOCUSBI_TOKEN}" }
     }
   }
 }
 ```
 
-**Codex** (`~/.codex/config.toml`) —— 令牌经环境变量传入:
+```bash
+export FOCUSBI_TOKEN="fbt_xxxxx"
+```
+
+**Codex** 一键添加:
+
+```bash
+codex mcp add focusbi --url http://127.0.0.1:8099/mcp \
+  --bearer-token-env-var FOCUSBI_TOKEN
+```
+
+令牌通过环境变量传入:
+
+```bash
+export FOCUSBI_TOKEN="fbt_xxxxx"
+```
+
+也可以手写 `~/.codex/config.toml`:
 
 ```toml
 [mcp_servers.focusbi]
 url = "http://127.0.0.1:8099/mcp"
 bearer_token_env_var = "FOCUSBI_TOKEN"
 ```
-
-```bash
-# 启动 Codex 前设置令牌环境变量
-export FOCUSBI_TOKEN="fbt_xxxxx"
-```
-
-> 也可用 CLI 添加: `codex mcp add focusbi --url http://127.0.0.1:8099/mcp --bearer-token-env-var FOCUSBI_TOKEN`。
 
 之后即可让 AI 列报表 → 看表结构 → 写模板 → `preview_template` 试跑 → 创建并发布。
 所有操作严格受该令牌所属用户的权限限制。详见 [`docs/REPORT.md`](docs/REPORT.md) 的 MCP 章节。

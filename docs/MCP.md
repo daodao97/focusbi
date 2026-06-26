@@ -21,47 +21,53 @@ MCP 服务地址是本站的 `/mcp` (Streamable HTTP)。假设本站为
 
 ### Claude Code
 
-编辑项目根的 `.mcp.json` (或全局 `~/.claude.json`):
+推荐用 Claude Code CLI 一键添加:
+
+```bash
+claude mcp add --scope local --transport http focusbi http://127.0.0.1:8099/mcp \
+  --header "Authorization: Bearer fbt_xxxxx"
+```
+
+这个命令写入本机 `~/.claude.json`, 只在当前项目生效, 适合放令牌。团队共享配置可写项目根目录
+`.mcp.json`, 令牌通过环境变量传入:
 
 ```json
 {
   "mcpServers": {
     "focusbi": {
+      "type": "http",
       "url": "http://127.0.0.1:8099/mcp",
-      "headers": { "Authorization": "Bearer fbt_xxxxx" }
+      "headers": { "Authorization": "Bearer ${FOCUSBI_TOKEN}" }
     }
   }
 }
 ```
 
-也可用命令添加:
-
 ```bash
-claude mcp add --transport http focusbi http://127.0.0.1:8099/mcp \
-  --header "Authorization: Bearer fbt_xxxxx"
+export FOCUSBI_TOKEN="fbt_xxxxx"
 ```
 
 ### Codex
 
-编辑 `~/.codex/config.toml` (Codex 的 HTTP MCP 令牌走环境变量, 不内联):
+推荐用 Codex CLI 一键添加:
 
-```toml
-[mcp_servers.focusbi]
-url = "http://127.0.0.1:8099/mcp"
-bearer_token_env_var = "FOCUSBI_TOKEN"
+```bash
+codex mcp add focusbi --url http://127.0.0.1:8099/mcp \
+  --bearer-token-env-var FOCUSBI_TOKEN
 ```
 
-启动 Codex 前设置令牌环境变量:
+令牌通过环境变量传入:
 
 ```bash
 export FOCUSBI_TOKEN="fbt_xxxxx"
 ```
 
-或用命令添加:
+也可以手写 `~/.codex/config.toml`:
 
-```bash
-codex mcp add focusbi --url http://127.0.0.1:8099/mcp \
-  --bearer-token-env-var FOCUSBI_TOKEN
+```toml
+[mcp_servers.focusbi]
+url = "http://127.0.0.1:8099/mcp"
+bearer_token_env_var = "FOCUSBI_TOKEN"
 ```
 
 ### 其它客户端
