@@ -32,11 +32,8 @@ function reportDocPlugin() {
     },
     closeBundle() {
       for (const [name, src] of Object.entries(DOC_FILES)) {
-        try {
-          fs.copyFileSync(src, path.resolve(__dirname, 'dist/' + name))
-        } catch (e) {
-          console.warn('[report-doc] 复制 ' + name + ' 失败:', e.message)
-        }
+        // 复制失败直接让构建失败 (而非静默 warn): 否则镜像里缺文档, 运行时才暴露 404。
+        fs.copyFileSync(src, path.resolve(__dirname, 'dist/' + name))
       }
     }
   }

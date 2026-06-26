@@ -11,7 +11,10 @@ RUN corepack enable && corepack prepare pnpm@10.32.1 --activate
 COPY web/package.json web/pnpm-lock.yaml ./
 RUN pnpm install --frozen-lockfile
 
-# 复制源码并构建 (产物在 web/dist)
+# 复制源码并构建 (产物在 web/dist)。
+# docs/ 也要带进来 (放在相对 web/ 的 ../docs): vite 插件会把 docs/SYNTAX.md、docs/MCP.md
+# 复制进 dist 作为应用内文档与 AI prompt 来源; 缺了它们前端文档抽屉会 404。
+COPY docs/ /build/docs/
 COPY web/ ./
 RUN pnpm build
 
