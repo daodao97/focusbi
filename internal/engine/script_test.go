@@ -300,3 +300,79 @@ func TestRunScriptTableEnumTransform(t *testing.T) {
 		t.Errorf("enum 转换未生效: %+v", rows)
 	}
 }
+
+func TestRunScriptChartConfigMetadataColumnsAndFormats(t *testing.T) {
+	code := `
+		const rows = [
+			{业务线:'GPT 代付', 本月销售额:1234.5, 上月销售额:1000, 利润占比:0.25},
+			{业务线:'gemini 代付', 本月销售额:2345.5, 上月销售额:2000, 利润占比:0.3}
+		]
+		result.chart({
+			id: 'current_previous_month_compare',
+			title: '本月 vs 上月销售对比',
+			subtitle: '本月为筛选结束月份',
+			type: 'bar',
+			x: '业务线',
+			y: ['本月销售额', '上月销售额'],
+			columns: ['业务线', '本月销售额', '上月销售额', '利润占比'],
+			formats: {'本月销售额':'money', '上月销售额':'money', '利润占比':'percent'},
+			rows,
+			sum: true
+		})
+	`
+	blocks, _, _ := runScript(code, scriptContext{})
+	if len(blocks) != 1 {
+		t.Fatalf("got %d blocks", len(blocks))
+	}
+	b := blocks[0]
+	if b.ID != "current_previous_month_compare" || b.Title != "本月 vs 上月销售对比" || b.Subtitle == "" {
+		t.Fatalf("metadata 未生效: %+v", b)
+	}
+	chart, ok := b.Chart.(*ChartConfig)
+	if !ok {
+		t.Fatalf("chart 类型错误: %#v", b.Chart)
+	}
+	if chart.Type != "bar" || chart.X != "业务线" || len(chart.Series) != 2 || chart.Series[0] != "本月销售额" {
+		t.Fatalf("chart 配置错误: %+v", chart)
+	}
+	if len(b.Columns) != 4 || b.Columns[1].Name != "本月销售额" || b.Columns[3].Name != "利润占比" {
+		t.Fatalf("列顺序错误: %+v", b.Columns)
+	}
+	if b.Rows[0]["本月销售额"] != "1,234.50" || b.Rows[0]["利润占比"] != "25.00%" {
+		t.Fatalf("formats 未生效: %+v", b.Rows[0])
+	}
+	if b.Summary["本月销售额"] != "3,580.00" {
+		t.Fatalf("summary 格式错误: %+v", b.Summary)
+	}
+	if _, ok := b.Summary["利润占比"]; ok {
+		t.Fatalf("percent 列默认不应汇总: %+v", b.Summary)
+	}
+}
+
+func TestRunScriptTableCanCarryChartAndStringColumns(t *testing.T) {
+	code := `
+		result.table({
+			id: 'revenue_by_business_line',
+			title: '业务线收入明细',
+			chart: {type:'bar', x:'业务线', y:['销售额']},
+			columns: ['月份', '业务线', '订单数', '销售额'],
+			formats: {'订单数':'number', '销售额':'money'},
+			rows: [{月份:'2026-06', 业务线:'GPT 代付', 订单数:1200, 销售额:45678.9}]
+		})
+	`
+	blocks, _, _ := runScript(code, scriptContext{})
+	b := blocks[0]
+	if b.ID != "revenue_by_business_line" || b.Title != "业务线收入明细" {
+		t.Fatalf("metadata 未生效: %+v", b)
+	}
+	if len(b.Columns) != 4 || b.Columns[0].Header != "月份" || b.Columns[3].Header != "销售额" {
+		t.Fatalf("columns 字符串写法错误: %+v", b.Columns)
+	}
+	if b.Rows[0]["订单数"] != "1,200" || b.Rows[0]["销售额"] != "45,678.90" {
+		t.Fatalf("formats 未生效: %+v", b.Rows[0])
+	}
+	chart, ok := b.Chart.(*ChartConfig)
+	if !ok || chart.Type != "bar" || chart.X != "业务线" || len(chart.Series) != 1 || chart.Series[0] != "销售额" {
+		t.Fatalf("table chart 配置错误: %#v", b.Chart)
+	}
+}

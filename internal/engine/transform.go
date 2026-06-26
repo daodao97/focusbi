@@ -13,6 +13,7 @@ import (
 //   - enum:     "1:成功,0:失败"  把原始值映射为标签
 //   - ratio:    数值 / ratio 后追加 "%" (如 ratio=1 表示值本身是百分比)
 //   - round:    保留 N 位小数
+//   - format:   money / number / integer / percent 快捷格式化
 //   - date:     把日期/时间字符串按 PHP 风格格式重排 (如 "Y-m-d")
 //   - time2str: 把 Unix 时间戳 (秒) 格式化为日期字符串
 //
@@ -27,8 +28,9 @@ func applyCellTransforms(cols []Column, rows []map[string]any) {
 		round, hasRound := intConfig(col.Config["round"])
 		dateFmt, hasDate := strConfig(col.Config["date"])
 		tsFmt, hasTime2str := strConfig(col.Config["time2str"])
+		format, hasFormat := strConfig(col.Config["format"])
 
-		if enumMap == nil && !hasRatio && !hasRound && !hasDate && !hasTime2str {
+		if enumMap == nil && !hasRatio && !hasRound && !hasDate && !hasTime2str && !hasFormat {
 			continue
 		}
 		for _, row := range rows {
@@ -45,6 +47,8 @@ func applyCellTransforms(cols []Column, rows []map[string]any) {
 				row[col.Name] = formatDateCell(cast.ToString(v), dateFmt)
 			case hasTime2str:
 				row[col.Name] = time2str(v, tsFmt)
+			case hasFormat:
+				row[col.Name] = formatCellValue(v, format)
 			case hasRatio && ratio != 0:
 				row[col.Name] = formatFloat(cast.ToFloat64(v)/ratio*100, 2) + "%"
 			case hasRound:
@@ -155,7 +159,17 @@ func computeSummary(cols []Column, rows []map[string]any, wantSum, wantAvg bool)
 		}
 		labelFirstCol(cols, avg, totals, "平均")
 	}
+	formatSummaryRows(cols, sum, avg)
 	return sum, avg
+}
+
+func formatSummaryRows(cols []Column, rows ...map[string]any) {
+	for _, row := range rows {
+		if row == nil {
+			continue
+		}
+		applyCellTransforms(cols, []map[string]any{row})
+	}
 }
 
 // labelFirstCol 在汇总行的第一列 (若它不参与求和) 放置标签 "合计"/"平均"。
@@ -212,10 +226,64 @@ func toFloat(v any) (float64, error) {
 	case int, int64, int32:
 		return cast.ToFloat64(val), nil
 	case string:
-		return strconv.ParseFloat(strings.TrimSpace(val), 64)
+		s := strings.TrimSpace(val)
+		s = strings.ReplaceAll(s, ",", "")
+		s = strings.TrimSuffix(s, "%")
+		return strconv.ParseFloat(strings.TrimSpace(s), 64)
 	default:
 		return strconv.ParseFloat(cast.ToString(v), 64)
 	}
+}
+
+func formatCellValue(v any, format string) any {
+	f, err := toFloat(v)
+	if err != nil {
+		return v
+	}
+	switch strings.ToLower(strings.TrimSpace(format)) {
+	case "money", "currency":
+		return addThousands(formatFloat(f, 2))
+	case "number":
+		return addThousands(trimFloat(f))
+	case "integer", "int":
+		return addThousands(formatFloat(f, 0))
+	case "percent", "percentage":
+		return formatFloat(f*100, 2) + "%"
+	default:
+		return v
+	}
+}
+
+func addThousands(s string) string {
+	sign := ""
+	if strings.HasPrefix(s, "-") {
+		sign = "-"
+		s = strings.TrimPrefix(s, "-")
+	}
+	intPart, fracPart, hasFrac := strings.Cut(s, ".")
+	n := len(intPart)
+	if n <= 3 {
+		if hasFrac {
+			return sign + intPart + "." + fracPart
+		}
+		return sign + intPart
+	}
+	var b strings.Builder
+	b.WriteString(sign)
+	first := n % 3
+	if first == 0 {
+		first = 3
+	}
+	b.WriteString(intPart[:first])
+	for i := first; i < n; i += 3 {
+		b.WriteByte(',')
+		b.WriteString(intPart[i : i+3])
+	}
+	if hasFrac {
+		b.WriteByte('.')
+		b.WriteString(fracPart)
+	}
+	return b.String()
 }
 
 func formatFloat(f float64, prec int) string {

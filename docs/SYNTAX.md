@@ -612,9 +612,9 @@ result.table({
 | `params` | 查看者提交的过滤器**原始值** (字符串), 如 `params.day`; 多选为逗号串 `"web,app"` |
 | `query(sql, args?, dsn?)` | 执行 SQL 返回行数组; `args` 为 `?` 占位参数 (**参数化, 防注入**); `dsn` 可覆盖数据源 |
 | `where(obj)` | 把条件对象拼成参数化 WHERE 片段, 返回 `{sql, args}` (空值自动跳过, 见下) |
-| `result.table({title,columns,rows,sum,avg,row_tag})` | 产出表格区块; 列配置/汇总/行样式同声明式 (见下) |
+| `result.table({id,title,subtitle,columns,rows,chart,formats,sum,avg,row_tag})` | 产出表格区块; 列配置/图表/汇总/行样式同声明式 (见下) |
 | `result.markdown(text)` | 产出 markdown 区块 |
-| `result.chart(cfg, rows)` | 产出图表 (cfg 同 `@chart`, 见 §4) |
+| `result.chart(cfg, rows?)` | 产出图表区块; `cfg` 可带 `id/title/columns/formats/rows` (见下) |
 | `result.filter({name,label,type,options,default})` | 动态产出**过滤器** (下拉选项可由脚本任意计算, 见下) |
 | `now()` | 当前时间 (RFC3339 字符串) |
 | `formatDate(value, fmt)` | 日期格式化 (PHP 风格, 见 §6) |
@@ -662,16 +662,19 @@ result.table({ rows })
 const rows = query('SELECT day, SUM(amount) AS amt FROM sales GROUP BY day ORDER BY day')
 
 result.markdown('## 每日销售趋势\n数据 T+1 更新')   // 文字说明 (支持 markdown)
-result.chart({ type:'line', x:'day', series:['amt'] }, rows)  // 折线图
+result.chart({ type:'line', x:'day', series:['amt'], title:'趋势' }, rows)  // 折线图
 result.table({ title:'明细', rows })                // 同一份数据再出表格
 #!END
 ```
 
 - `result.markdown(text)`: 产出一段 markdown 文字区块。
-- `result.chart(cfg, rows)`: `cfg` 与声明式 `@chart` 完全一致 (见 §4):
-  - 折线/柱状: `{type:'line'|'bar', x:'列', series:['列1','列2']}`
+- `result.chart(cfg, rows?)`: 产出图表区块, `cfg` 支持 `id/title/subtitle/notice/columns/formats/sum/avg/invisible`;
+  `rows` 可作为第二参数传入, 也可直接写在 `cfg.rows`。
+  - 折线/柱状: `{type:'line'|'bar', x:'列', series:['列1','列2']}` 或 `{type:'bar', x:'列', y:['列1','列2']}`
   - 饼图: `{type:'pie', name:'分类列', value:'数值列'}`
   - `rows` 为图表数据 (通常就是 `query()` 的结果)。
+- `result.table({...})`: 若传 `chart`, 同一个 block 会先显示图表, 再显示表格。`chart` 写法同上或同
+  `@chart` 字符串, 如 `chart: 'bar:销售额,利润'`。
 
 ### 工具函数
 
@@ -763,6 +766,14 @@ result.table({
 #!END
 ```
 
+- **区块元数据**: `id` / `title` / `subtitle` / `notice` / `invisible` / `merge_cell` 与普通 SQL block
+  的同名注解一致。显式设置 `id` 可避免脚本产出的 block 被自动命名为 `block_1`。
+- **列顺序简写**: `columns` 可写完整对象数组, 也可写字符串数组固定顺序:
+  `columns: ['月份','业务线','订单数','销售额']`。
+- **格式简写**: `formats` 可按列名配置常见展示格式:
+  `formats: {'销售额':'money','订单数':'number','利润占比':'percent'}`。
+  `money` 显示千分位和 2 位小数, `number` 显示千分位, `percent` 按 `0.25 -> 25.00%` 展示并默认
+  不参与合计。更复杂的格式仍用 `columns[].config`。
 - **列配置 `config`**: `tag` / `percent` / `enum` / `ratio` / `round` / `date` / `time2str` 等 (见 §6) 都生效。
 - **`sum` / `avg`**: 产出合计/平均行 (同 §3 的 `@sum`/`@avg`, 配合列 `count:true`)。
 - **`row_tag`**: 行级条件样式 (同 §6.1), 传规则对象或数组。

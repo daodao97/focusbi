@@ -73,6 +73,21 @@ func mapChart(m map[string]any, cols []string) *ChartConfig {
 	if t, ok := m["type"].(string); ok && t != "" {
 		c.Type = t
 	}
+	if c.Type == "pie" {
+		if name, ok := m["name"].(string); ok {
+			c.Name = name
+		} else if name, ok := m["category"].(string); ok {
+			c.Name = name
+		} else if len(cols) > 0 {
+			c.Name = cols[0]
+		}
+		if value, ok := m["value"].(string); ok {
+			c.Value = value
+		} else if len(cols) > 1 {
+			c.Value = cols[1]
+		}
+		return c
+	}
 	if x, ok := m["x"].(string); ok {
 		c.X = x
 	} else if x, ok := m["xAxis"].(string); ok {
@@ -80,17 +95,33 @@ func mapChart(m map[string]any, cols []string) *ChartConfig {
 	} else if len(cols) > 0 {
 		c.X = cols[0]
 	}
-	if s, ok := m["series"].([]any); ok {
-		for _, it := range s {
-			if str, ok := it.(string); ok {
-				c.Series = append(c.Series, str)
-			}
-		}
+	switch {
+	case m["series"] != nil:
+		c.Series = chartStringList(m["series"])
+	case m["y"] != nil:
+		c.Series = chartStringList(m["y"])
+	case m["yAxis"] != nil:
+		c.Series = chartStringList(m["yAxis"])
 	}
 	if len(c.Series) == 0 && len(cols) > 1 {
 		c.Series = cols[1:]
 	}
 	return c
+}
+
+func chartStringList(v any) []string {
+	if s, ok := v.(string); ok && s != "" {
+		return []string{s}
+	}
+	var out []string
+	if s, ok := v.([]any); ok {
+		for _, it := range s {
+			if str, ok := it.(string); ok {
+				out = append(out, str)
+			}
+		}
+	}
+	return out
 }
 
 func autoChart(cols []string) *ChartConfig {

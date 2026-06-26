@@ -210,39 +210,9 @@ func tableFromJS(vm *goja.Runtime, arg goja.Value) Block {
 	if spec == nil {
 		return blk
 	}
-	blk.ID = cast.ToString(spec["id"])
-	blk.Title = cast.ToString(spec["title"])
-	blk.Subtitle = cast.ToString(spec["subtitle"])
-	blk.Notice = cast.ToString(spec["notice"])
-
-	// rows
-	if rows, ok := spec["rows"].([]any); ok {
-		blk.Rows = make([]map[string]any, 0, len(rows))
-		for _, r := range rows {
-			if m, ok := r.(map[string]any); ok {
-				blk.Rows = append(blk.Rows, m)
-			}
-		}
-	}
-
-	// columns: 显式给则用, 否则从首行键推断
-	if cols, ok := spec["columns"].([]any); ok {
-		for _, c := range cols {
-			m, ok := c.(map[string]any)
-			if !ok {
-				continue
-			}
-			col := Column{Name: cast.ToString(m["name"]), Header: cast.ToString(m["name"])}
-			if h := cast.ToString(m["header"]); h != "" {
-				col.Header = h
-			}
-			if cfg, ok := m["config"].(map[string]any); ok {
-				col.Config = cfg
-			}
-			blk.Columns = append(blk.Columns, col)
-		}
-	} else if len(blk.Rows) > 0 {
-		blk.Columns = inferColumns(blk.Rows[0])
+	applyScriptBlockSpec(&blk, spec, spec["rows"])
+	if chart, ok := spec["chart"]; ok {
+		blk.Chart = normalizeChart(chart, columnNames(blk.Columns))
 	}
 
 	// 复用列级处理链: columns[].config 的 tag/enum/percent/date 等生效, 支持 row_tag / sum / avg。
@@ -400,24 +370,29 @@ func filterFromJS(arg goja.Value) (FilterDef, bool) {
 }
 
 // chartFromJS 把 result.chart(cfg, rows) 转成 Block (复用 normalizeChart)。
+// 兼容两种写法:
+//
+//	result.chart({type:'bar', x:'业务线', y:['销售额'], rows, id, title})
+//	result.chart({type:'bar', x:'业务线', y:['销售额'], id, title}, rows)
 func chartFromJS(cfgArg, rowsArg goja.Value) Block {
 	blk := Block{Type: "table"}
-	if rows, ok := rowsArg.Export().([]any); ok {
-		blk.Rows = make([]map[string]any, 0, len(rows))
-		for _, r := range rows {
-			if m, ok := r.(map[string]any); ok {
-				blk.Rows = append(blk.Rows, m)
-			}
+	spec, _ := cfgArg.Export().(map[string]any)
+	var rows any
+	if !goja.IsUndefined(rowsArg) && !goja.IsNull(rowsArg) {
+		rows = rowsArg.Export()
+	} else if spec != nil {
+		rows = spec["rows"]
+	}
+	if spec != nil {
+		applyScriptBlockSpec(&blk, spec, rows)
+		applyColumnPipeline(&blk, spec["row_tag"], cast.ToBool(spec["sum"]), cast.ToBool(spec["avg"]))
+	} else {
+		blk.Rows = rowsFromJS(rows)
+		if len(blk.Rows) > 0 {
+			blk.Columns = inferColumns(blk.Rows[0])
 		}
 	}
-	if len(blk.Rows) > 0 {
-		blk.Columns = inferColumns(blk.Rows[0])
-	}
-	var colNames []string
-	for _, c := range blk.Columns {
-		colNames = append(colNames, c.Name)
-	}
-	blk.Chart = normalizeChart(cfgArg.Export(), colNames)
+	blk.Chart = normalizeChart(cfgArg.Export(), columnNames(blk.Columns))
 	return blk
 }
 
@@ -428,6 +403,102 @@ func inferColumns(row map[string]any) []Column {
 		cols = append(cols, Column{Name: k, Header: k})
 	}
 	return cols
+}
+
+func applyScriptBlockSpec(blk *Block, spec map[string]any, rows any) {
+	blk.ID = cast.ToString(spec["id"])
+	blk.Title = cast.ToString(spec["title"])
+	blk.Subtitle = cast.ToString(spec["subtitle"])
+	blk.Notice = cast.ToString(spec["notice"])
+	blk.Invisible = cast.ToBool(spec["invisible"])
+	blk.MergeCell = parseMergeCell(cast.ToString(spec["merge_cell"]))
+	blk.Rows = rowsFromJS(rows)
+	blk.Columns = columnsFromJS(spec["columns"], blk.Rows)
+	applyFormatSpec(blk.Columns, spec["formats"])
+}
+
+func rowsFromJS(raw any) []map[string]any {
+	rows, ok := raw.([]any)
+	if !ok {
+		return nil
+	}
+	out := make([]map[string]any, 0, len(rows))
+	for _, r := range rows {
+		if m, ok := r.(map[string]any); ok {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+func columnsFromJS(raw any, rows []map[string]any) []Column {
+	if cols, ok := raw.([]any); ok {
+		out := make([]Column, 0, len(cols))
+		for _, c := range cols {
+			switch v := c.(type) {
+			case string:
+				if v != "" {
+					out = append(out, Column{Name: v, Header: v})
+				}
+			case map[string]any:
+				name := cast.ToString(v["name"])
+				if name == "" {
+					name = cast.ToString(v["field"])
+				}
+				if name == "" {
+					continue
+				}
+				col := Column{Name: name, Header: name}
+				if h := cast.ToString(v["header"]); h != "" {
+					col.Header = h
+				} else if h := cast.ToString(v["label"]); h != "" {
+					col.Header = h
+				}
+				if cfg, ok := v["config"].(map[string]any); ok {
+					col.Config = cfg
+				}
+				out = append(out, col)
+			}
+		}
+		return out
+	}
+	if len(rows) > 0 {
+		return inferColumns(rows[0])
+	}
+	return nil
+}
+
+func applyFormatSpec(cols []Column, raw any) {
+	formats, ok := raw.(map[string]any)
+	if !ok {
+		return
+	}
+	for i := range cols {
+		format := strings.ToLower(strings.TrimSpace(cast.ToString(formats[cols[i].Name])))
+		if format == "" {
+			format = strings.ToLower(strings.TrimSpace(cast.ToString(formats[cols[i].Header])))
+		}
+		if format == "" {
+			continue
+		}
+		if cols[i].Config == nil {
+			cols[i].Config = map[string]any{}
+		}
+		if _, exists := cols[i].Config["format"]; !exists {
+			cols[i].Config["format"] = format
+		}
+		if (format == "percent" || format == "percentage") && cols[i].Config["nosum"] == nil {
+			cols[i].Config["nosum"] = true
+		}
+	}
+}
+
+func columnNames(cols []Column) []string {
+	names := make([]string, 0, len(cols))
+	for _, c := range cols {
+		names = append(names, c.Name)
+	}
+	return names
 }
 
 // scriptFetch 实现 fetch(url, opts?) -> {status, body, json()}。
