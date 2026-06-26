@@ -129,7 +129,7 @@ raw 区块 (原样输出, 适合展示纯文本/已转义内容)：
   但不会渲染到页面。若执行报错, 错误仍会显示出来, 方便排查。
 - **`@merge_cell`**: 层级合并 —— 后列仅当其前置合并列也相同时才合并, 适合月度/分组明细。
 - **`@sql_cache`**: 以 `数据源 + SQL` 为键缓存结果, TTL 内重复执行直接命中, 降低库压力。
-  前端点击"刷新"会旁路缓存取实时数据; 编辑预览始终不走缓存。
+  前端点击"刷新"和自动刷新会旁路缓存取实时数据; 编辑预览、MCP 预览、订阅执行始终不走缓存。
 - **自动刷新**: 是**报表级**设置 (不是块注解), 在报表编辑器里配置"自动刷新间隔(秒)",
   存于 `report.settings`。加载后每隔 N 秒静默重查 (旁路缓存), 适合监控大屏。
 - **顶部 HTML**: 同为**报表级**设置 (`report.settings.prepend_content`), 在报表编辑器
@@ -616,7 +616,7 @@ result.table({
 | `params` | 查看者提交的过滤器**原始值** (字符串), 如 `params.day`; 多选为逗号串 `"web,app"` |
 | `dataset(id)` | 按前面已执行 block 的 `@id` 读取 rows 副本 |
 | `block(id)` | 按前面已执行 block 的 `@id` 读取 `{id,title,columns,rows,summary,average,...}` 副本 |
-| `query(sql, args?, dsn?)` | 执行 SQL 返回行数组; `args` 为 `?` 占位参数 (**参数化, 防注入**); `dsn` 可覆盖数据源 |
+| `query(sql, args?, dsnOrOptions?, options?)` | 执行 SQL 返回行数组; `args` 为 `?` 占位参数 (**参数化, 防注入**); 可覆盖数据源和缓存 |
 | `where(obj)` | 把条件对象拼成参数化 WHERE 片段, 返回 `{sql, args}` (空值自动跳过, 见下) |
 | `result.table({id,title,subtitle,columns,rows,chart,formats,sum,avg,row_tag})` | 产出表格区块; 列配置/图表/汇总/行样式同声明式 (见下) |
 | `result.markdown(text)` | 产出 markdown 区块 |
@@ -660,6 +660,25 @@ result.table({ rows })
 - **值**: 空 (`undefined`/`null`/`""`/空数组) 的条件**自动跳过** —— 实现可选过滤器; 数组值转 `IN (?,...)`。
 - 无任何有效条件时 `w.sql` 为 `1=1`, 可安全嵌入 `WHERE`。
 - `where()` 只负责拼**值条件** (参数化); 列名/表名等结构仍需自己白名单拼接。
+
+脚本里的 `query()` 默认不缓存。需要缓存时, 在第三或第四参数传选项:
+
+```
+const rows = query(
+  'SELECT day, amount FROM sales WHERE day >= ?',
+  [params.day],
+  { sql_cache: 300 }                 // 缓存 300 秒
+)
+
+const rows2 = query(
+  'SELECT day, amount FROM sales WHERE day >= ?',
+  [params.day],
+  'sales_db',
+  { sql_cache: 300 }                 // 指定数据源 + 缓存
+)
+```
+
+选项支持 `{dsn, sql_cache}`; `sql_cache` 也可写成 `cache` 或 `ttl`。
 
 ### 复用前置 Block 数据
 

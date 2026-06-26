@@ -3,7 +3,15 @@ package engine
 import (
 	"testing"
 	"time"
+
+	"xproxy/internal/datasource"
 )
+
+func resetQueryCacheForTest() {
+	queryCacheMu.Lock()
+	defer queryCacheMu.Unlock()
+	queryCache = map[string]cacheEntry{}
+}
 
 func TestCacheKeyDistinct(t *testing.T) {
 	if cacheKey("a", "SELECT 1") == cacheKey("b", "SELECT 1") {
@@ -12,7 +20,10 @@ func TestCacheKeyDistinct(t *testing.T) {
 	if cacheKey("a", "SELECT 1") == cacheKey("a", "SELECT 2") {
 		t.Error("不同 sql 应得不同键")
 	}
-	k1, k2 := cacheKey("a", "SELECT 1"), cacheKey("a", "SELECT 1")
+	if cacheKey("a", "SELECT ?", 1) == cacheKey("a", "SELECT ?", 2) {
+		t.Error("不同 args 应得不同键")
+	}
+	k1, k2 := cacheKey("a", "SELECT ?", 1), cacheKey("a", "SELECT ?", 1)
 	if k1 != k2 {
 		t.Error("相同输入应得相同键")
 	}
@@ -35,5 +46,129 @@ func TestPruneExpired(t *testing.T) {
 	}
 	if deadOK {
 		t.Error("过期项应被清理")
+	}
+}
+
+func TestRunSQLCacheUsesCachedResult(t *testing.T) {
+	resetQueryCacheForTest()
+	setupSQLiteDefault(t)
+
+	content := `
+-- @id=pv_cached
+-- @sql_cache=60
+SELECT day, pv FROM pv WHERE day = '2026-06-24';
+`
+	r := NewRunner("default")
+	res, err := r.Run(content, nil)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	first, _ := toFloat(res.Blocks[0].Rows[0]["pv"])
+	if first != 300 {
+		t.Fatalf("first pv = %v, want 300", res.Blocks[0].Rows[0]["pv"])
+	}
+
+	if _, err := datasource.Query("default", `UPDATE pv SET pv = 999 WHERE day = '2026-06-24'`); err != nil {
+		t.Fatalf("update pv: %v", err)
+	}
+
+	res, err = r.Run(content, nil)
+	if err != nil {
+		t.Fatalf("Run cached: %v", err)
+	}
+	cached, _ := toFloat(res.Blocks[0].Rows[0]["pv"])
+	if cached != 300 {
+		t.Fatalf("cached pv = %v, want cached 300", res.Blocks[0].Rows[0]["pv"])
+	}
+}
+
+func TestRunSQLCacheBypass(t *testing.T) {
+	resetQueryCacheForTest()
+	setupSQLiteDefault(t)
+
+	content := `
+-- @id=pv_cached
+-- @sql_cache=60
+SELECT day, pv FROM pv WHERE day = '2026-06-24';
+`
+	r := NewRunner("default")
+	if _, err := r.Run(content, nil); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if _, err := datasource.Query("default", `UPDATE pv SET pv = 888 WHERE day = '2026-06-24'`); err != nil {
+		t.Fatalf("update pv: %v", err)
+	}
+
+	res, err := r.WithNoCache(true).Run(content, nil)
+	if err != nil {
+		t.Fatalf("Run no-cache: %v", err)
+	}
+	got, _ := toFloat(res.Blocks[0].Rows[0]["pv"])
+	if got != 888 {
+		t.Fatalf("no-cache pv = %v, want 888", res.Blocks[0].Rows[0]["pv"])
+	}
+}
+
+func TestRunScriptQueryCacheUsesCachedResult(t *testing.T) {
+	resetQueryCacheForTest()
+	setupSQLiteDefault(t)
+
+	content := `
+#!SCRIPT
+const rows = query(
+  'SELECT day, pv FROM pv WHERE day = ?',
+  ['2026-06-24'],
+  {sql_cache: 60}
+)
+result.table({id:'script_cached', rows})
+#!END
+`
+	r := NewRunner("default")
+	if _, err := r.Run(content, nil); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if _, err := datasource.Query("default", `UPDATE pv SET pv = 777 WHERE day = '2026-06-24'`); err != nil {
+		t.Fatalf("update pv: %v", err)
+	}
+
+	res, err := r.Run(content, nil)
+	if err != nil {
+		t.Fatalf("Run cached: %v", err)
+	}
+	got, _ := toFloat(res.Blocks[0].Rows[0]["pv"])
+	if got != 300 {
+		t.Fatalf("script cached pv = %v, want cached 300", res.Blocks[0].Rows[0]["pv"])
+	}
+}
+
+func TestRunScriptQueryCacheBypass(t *testing.T) {
+	resetQueryCacheForTest()
+	setupSQLiteDefault(t)
+
+	content := `
+#!SCRIPT
+const rows = query(
+  'SELECT day, pv FROM pv WHERE day = ?',
+  ['2026-06-24'],
+  {sql_cache: 60}
+)
+result.table({id:'script_cached', rows})
+#!END
+`
+	r := NewRunner("default")
+	if _, err := r.Run(content, nil); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if _, err := datasource.Query("default", `UPDATE pv SET pv = 666 WHERE day = '2026-06-24'`); err != nil {
+		t.Fatalf("update pv: %v", err)
+	}
+
+	res, err := r.WithNoCache(true).Run(content, nil)
+	if err != nil {
+		t.Fatalf("Run no-cache: %v", err)
+	}
+	got, _ := toFloat(res.Blocks[0].Rows[0]["pv"])
+	if got != 666 {
+		t.Fatalf("script no-cache pv = %v, want 666", res.Blocks[0].Rows[0]["pv"])
 	}
 }

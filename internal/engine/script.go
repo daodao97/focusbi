@@ -7,8 +7,6 @@ import (
 	"strings"
 	"time"
 
-	"xproxy/internal/datasource"
-
 	"github.com/dop251/goja"
 	"github.com/spf13/cast"
 )
@@ -35,6 +33,7 @@ type scriptContext struct {
 	params     map[string]string
 	authz      func(dsn string) error // 数据源授权 (nil = 不校验)
 	blocks     map[string]Block       // 已执行完成的 block, 按 id 引用
+	noCache    bool                   // 旁路查询缓存
 }
 
 // runScript 执行一段脚本, 返回它产出的区块与过滤器。脚本出错/超时不崩报表, 以 Error 区块返回。
@@ -102,7 +101,7 @@ func injectScriptAPI(vm *goja.Runtime, ctx scriptContext, acc *scriptResult) {
 		return vm.ToValue(blockForJS(blk))
 	})
 
-	// query(sql, args?, dsn?) -> []row
+	// query(sql, args?, dsnOrOptions?, options?) -> []row
 	_ = vm.Set("query", func(call goja.FunctionCall) goja.Value {
 		sql := call.Argument(0).String()
 		var args []any
@@ -112,18 +111,16 @@ func injectScriptAPI(vm *goja.Runtime, ctx scriptContext, acc *scriptResult) {
 			}
 		}
 		dsn := ctx.defaultDSN
-		if d := call.Argument(2); !goja.IsUndefined(d) && !goja.IsNull(d) {
-			if s := strings.TrimSpace(d.String()); s != "" {
-				dsn = s
-			}
-		}
+		ttlSec := 0
+		dsn, ttlSec = scriptQueryOptions(call.Argument(2), dsn, ttlSec)
+		dsn, ttlSec = scriptQueryOptions(call.Argument(3), dsn, ttlSec)
 		// 数据源授权: 脚本可指定任意 dsn, 必须校验。
 		if ctx.authz != nil {
 			if err := ctx.authz(dsn); err != nil {
 				panic(vm.ToValue(err.Error()))
 			}
 		}
-		qr, err := datasource.Query(dsn, sql, args...)
+		qr, err := cachedQuery(dsn, sql, ttlSec, ctx.noCache, args...)
 		if err != nil {
 			panic(vm.ToValue("query 失败: " + err.Error()))
 		}
@@ -511,6 +508,32 @@ func columnFromMap(v map[string]any) (Column, bool) {
 		col.Config = cfg
 	}
 	return col, true
+}
+
+func scriptQueryOptions(v goja.Value, dsn string, ttlSec int) (string, int) {
+	if goja.IsUndefined(v) || goja.IsNull(v) {
+		return dsn, ttlSec
+	}
+	exported := v.Export()
+	switch opt := exported.(type) {
+	case string:
+		if s := strings.TrimSpace(opt); s != "" {
+			dsn = s
+		}
+	case int, int64, int32, float64, float32:
+		ttlSec = cast.ToInt(opt)
+	case map[string]any:
+		if s := strings.TrimSpace(cast.ToString(opt["dsn"])); s != "" {
+			dsn = s
+		}
+		for _, key := range []string{"sql_cache", "cache", "ttl"} {
+			if raw, ok := opt[key]; ok {
+				ttlSec = cast.ToInt(raw)
+				break
+			}
+		}
+	}
+	return dsn, ttlSec
 }
 
 func applyFormatSpec(cols []Column, raw any) {

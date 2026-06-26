@@ -3,6 +3,8 @@ package engine
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
+	"fmt"
 	"sync"
 	"time"
 
@@ -26,38 +28,52 @@ var (
 	queryCache   = map[string]cacheEntry{}
 )
 
-// cacheKey 生成 dsn+sql 的稳定键。
-func cacheKey(dsn, sql string) string {
-	h := sha256.Sum256([]byte(dsn + "\x00" + sql))
+// cacheKey 生成 dsn+sql+args 的稳定键。
+func cacheKey(dsn, sql string, args ...any) string {
+	argBytes, err := json.Marshal(args)
+	if err != nil {
+		argBytes = []byte(fmt.Sprint(args...))
+	}
+	h := sha256.Sum256([]byte(dsn + "\x00" + sql + "\x00" + string(argBytes)))
 	return hex.EncodeToString(h[:])
 }
 
 // cachedQuery 在 ttl>0 时走缓存执行查询; ttl<=0 或 bypass=true 时直连。
-// 命中缓存返回结果的浅拷贝列与共享行 (调用方 buildColumns 会另建 Column, 行只读展示)。
-func cachedQuery(dsn, sql string, ttlSec int, bypass bool) (*datasource.QueryResult, error) {
+// 命中缓存返回结果副本, 避免后续列格式化/排序/透视等处理污染缓存。
+func cachedQuery(dsn, sql string, ttlSec int, bypass bool, args ...any) (*datasource.QueryResult, error) {
 	if ttlSec <= 0 || bypass {
-		return datasource.Query(dsn, sql)
+		return datasource.Query(dsn, sql, args...)
 	}
-	key := cacheKey(dsn, sql)
+	key := cacheKey(dsn, sql, args...)
 	now := nowFunc()
 
 	queryCacheMu.Lock()
 	if e, ok := queryCache[key]; ok && now.Before(e.expires) {
 		queryCacheMu.Unlock()
-		return e.res, nil
+		return cloneQueryResult(e.res), nil
 	}
 	queryCacheMu.Unlock()
 
-	res, err := datasource.Query(dsn, sql)
+	res, err := datasource.Query(dsn, sql, args...)
 	if err != nil {
 		return nil, err
 	}
 
 	queryCacheMu.Lock()
-	queryCache[key] = cacheEntry{res: res, expires: now.Add(time.Duration(ttlSec) * time.Second)}
+	queryCache[key] = cacheEntry{res: cloneQueryResult(res), expires: now.Add(time.Duration(ttlSec) * time.Second)}
 	pruneExpiredLocked(now)
 	queryCacheMu.Unlock()
 	return res, nil
+}
+
+func cloneQueryResult(res *datasource.QueryResult) *datasource.QueryResult {
+	if res == nil {
+		return nil
+	}
+	return &datasource.QueryResult{
+		Columns: append([]string(nil), res.Columns...),
+		Rows:    cloneRows(res.Rows),
+	}
 }
 
 // pruneExpiredLocked 顺带清理过期项, 防止键无限增长。调用方须持锁。

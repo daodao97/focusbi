@@ -90,7 +90,7 @@ func (r *Runner) Run(content string, params map[string]string) (*Result, error) 
 		// 脚本可产出多个区块, 与单 block 模型不同, 单独处理。
 		if rb.kind == "script" {
 			flush()
-			ctx := scriptContext{defaultDSN: r.defaultDSN, params: params, authz: r.authz, blocks: blockRefs}
+			ctx := scriptContext{defaultDSN: r.defaultDSN, params: params, authz: r.authz, blocks: blockRefs, noCache: r.noCache}
 			scriptBlocks, scriptFilters, _ := runScript(stripMarker(rb.body), ctx)
 			// 脚本产出的过滤器并入结果 (供前端渲染下拉)
 			result.Filters = append(result.Filters, scriptFilters...)
