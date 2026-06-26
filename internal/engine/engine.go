@@ -57,11 +57,18 @@ func (r *Runner) Run(content string, params map[string]string) (*Result, error) 
 	// pending 是尚未定稿的合并组基底 (延迟一拍推送):
 	// SQL 块默认先挂起, 若紧随的 SQL 块带 @join/@union 则并入它, 否则先推送再换基底。
 	var pending *mergeGroup
+	blockSeq := 0
+	blockRefs := map[string]Block{}
 	appendBlock := func(b Block) {
+		blockSeq++
 		if b.ID == "" {
-			b.ID = fmt.Sprintf("block_%d", len(result.Blocks)+1)
+			b.ID = fmt.Sprintf("block_%d", blockSeq)
 		}
+		blockRefs[b.ID] = cloneBlockForScript(b)
 		result.Messages = append(result.Messages, b.Messages...)
+		if b.Hidden && b.Error == "" {
+			return
+		}
 		result.Blocks = append(result.Blocks, b)
 	}
 	flush := func() {
@@ -83,7 +90,7 @@ func (r *Runner) Run(content string, params map[string]string) (*Result, error) 
 		// 脚本可产出多个区块, 与单 block 模型不同, 单独处理。
 		if rb.kind == "script" {
 			flush()
-			ctx := scriptContext{defaultDSN: r.defaultDSN, params: params, authz: r.authz}
+			ctx := scriptContext{defaultDSN: r.defaultDSN, params: params, authz: r.authz, blocks: blockRefs}
 			scriptBlocks, scriptFilters, _ := runScript(stripMarker(rb.body), ctx)
 			// 脚本产出的过滤器并入结果 (供前端渲染下拉)
 			result.Filters = append(result.Filters, scriptFilters...)
@@ -104,6 +111,7 @@ func (r *Runner) Run(content string, params map[string]string) (*Result, error) 
 		case "markdown", "raw":
 			flush()
 			block := Block{ID: annotationString(rb, "id"), Title: annotationString(rb, "title"), Type: rb.kind}
+			block.Hidden = annotationBool(rb, "hidden")
 			block.Markdown = applyMacros(stripMarker(rb.body), macros)
 			appendBlock(block)
 		case "sql":
@@ -261,6 +269,7 @@ func (g *mergeGroup) finalize() Block {
 	block.Subtitle = annotationString(rb, "subtitle")
 	block.Notice = annotationString(rb, "notice")
 	block.Invisible = annotationBool(rb, "invisible")
+	block.Hidden = annotationBool(rb, "hidden")
 	block.MergeCell = parseMergeCell(annotationString(rb, "merge_cell"))
 	return block
 }

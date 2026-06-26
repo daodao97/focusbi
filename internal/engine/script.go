@@ -34,6 +34,7 @@ type scriptContext struct {
 	defaultDSN string
 	params     map[string]string
 	authz      func(dsn string) error // 数据源授权 (nil = 不校验)
+	blocks     map[string]Block       // 已执行完成的 block, 按 id 引用
 }
 
 // runScript 执行一段脚本, 返回它产出的区块与过滤器。脚本出错/超时不崩报表, 以 Error 区块返回。
@@ -78,6 +79,28 @@ type scriptResult struct {
 func injectScriptAPI(vm *goja.Runtime, ctx scriptContext, acc *scriptResult) {
 	// params: 过滤器值 (只读 map)
 	_ = vm.Set("params", ctx.params)
+
+	// dataset(id) / block(id): 读取前面已执行完成的 block 数据。
+	// dataset 只返回 rows, block 返回带 columns/summary 等元数据的对象。
+	_ = vm.Set("dataset", func(call goja.FunctionCall) goja.Value {
+		id := strings.TrimSpace(call.Argument(0).String())
+		blk, ok := ctx.blocks[id]
+		if !ok {
+			panic(vm.ToValue("dataset 未找到: " + id))
+		}
+		if blk.Error != "" {
+			panic(vm.ToValue("dataset 执行失败: " + id + ": " + blk.Error))
+		}
+		return vm.ToValue(cloneRows(blk.Rows))
+	})
+	_ = vm.Set("block", func(call goja.FunctionCall) goja.Value {
+		id := strings.TrimSpace(call.Argument(0).String())
+		blk, ok := ctx.blocks[id]
+		if !ok {
+			panic(vm.ToValue("block 未找到: " + id))
+		}
+		return vm.ToValue(blockForJS(blk))
+	})
 
 	// query(sql, args?, dsn?) -> []row
 	_ = vm.Set("query", func(call goja.FunctionCall) goja.Value {
@@ -411,6 +434,7 @@ func applyScriptBlockSpec(blk *Block, spec map[string]any, rows any) {
 	blk.Subtitle = cast.ToString(spec["subtitle"])
 	blk.Notice = cast.ToString(spec["notice"])
 	blk.Invisible = cast.ToBool(spec["invisible"])
+	blk.Hidden = cast.ToBool(spec["hidden"])
 	blk.MergeCell = parseMergeCell(cast.ToString(spec["merge_cell"]))
 	blk.Rows = rowsFromJS(rows)
 	blk.Columns = columnsFromJS(spec["columns"], blk.Rows)
@@ -418,6 +442,9 @@ func applyScriptBlockSpec(blk *Block, spec map[string]any, rows any) {
 }
 
 func rowsFromJS(raw any) []map[string]any {
+	if rows, ok := raw.([]map[string]any); ok {
+		return cloneRows(rows)
+	}
 	rows, ok := raw.([]any)
 	if !ok {
 		return nil
@@ -432,6 +459,18 @@ func rowsFromJS(raw any) []map[string]any {
 }
 
 func columnsFromJS(raw any, rows []map[string]any) []Column {
+	if cols, ok := raw.([]Column); ok {
+		return cloneColumns(cols)
+	}
+	if cols, ok := raw.([]map[string]any); ok {
+		out := make([]Column, 0, len(cols))
+		for _, c := range cols {
+			if col, ok := columnFromMap(c); ok {
+				out = append(out, col)
+			}
+		}
+		return out
+	}
 	if cols, ok := raw.([]any); ok {
 		out := make([]Column, 0, len(cols))
 		for _, c := range cols {
@@ -441,23 +480,9 @@ func columnsFromJS(raw any, rows []map[string]any) []Column {
 					out = append(out, Column{Name: v, Header: v})
 				}
 			case map[string]any:
-				name := cast.ToString(v["name"])
-				if name == "" {
-					name = cast.ToString(v["field"])
+				if col, ok := columnFromMap(v); ok {
+					out = append(out, col)
 				}
-				if name == "" {
-					continue
-				}
-				col := Column{Name: name, Header: name}
-				if h := cast.ToString(v["header"]); h != "" {
-					col.Header = h
-				} else if h := cast.ToString(v["label"]); h != "" {
-					col.Header = h
-				}
-				if cfg, ok := v["config"].(map[string]any); ok {
-					col.Config = cfg
-				}
-				out = append(out, col)
 			}
 		}
 		return out
@@ -466,6 +491,26 @@ func columnsFromJS(raw any, rows []map[string]any) []Column {
 		return inferColumns(rows[0])
 	}
 	return nil
+}
+
+func columnFromMap(v map[string]any) (Column, bool) {
+	name := cast.ToString(v["name"])
+	if name == "" {
+		name = cast.ToString(v["field"])
+	}
+	if name == "" {
+		return Column{}, false
+	}
+	col := Column{Name: name, Header: name}
+	if h := cast.ToString(v["header"]); h != "" {
+		col.Header = h
+	} else if h := cast.ToString(v["label"]); h != "" {
+		col.Header = h
+	}
+	if cfg, ok := v["config"].(map[string]any); ok {
+		col.Config = cfg
+	}
+	return col, true
 }
 
 func applyFormatSpec(cols []Column, raw any) {
@@ -499,6 +544,83 @@ func columnNames(cols []Column) []string {
 		names = append(names, c.Name)
 	}
 	return names
+}
+
+func cloneBlockForScript(b Block) Block {
+	b.Rows = cloneRows(b.Rows)
+	b.Columns = cloneColumns(b.Columns)
+	b.Summary = cloneMap(b.Summary)
+	b.Average = cloneMap(b.Average)
+	return b
+}
+
+func blockForJS(b Block) map[string]any {
+	return map[string]any{
+		"id":         b.ID,
+		"type":       b.Type,
+		"title":      b.Title,
+		"subtitle":   b.Subtitle,
+		"notice":     b.Notice,
+		"columns":    columnsForJS(b.Columns),
+		"rows":       cloneRows(b.Rows),
+		"summary":    cloneMap(b.Summary),
+		"average":    cloneMap(b.Average),
+		"chart":      b.Chart,
+		"sql":        b.SQL,
+		"error":      b.Error,
+		"invisible":  b.Invisible,
+		"hidden":     b.Hidden,
+		"merge_cell": append([]string(nil), b.MergeCell...),
+	}
+}
+
+func cloneRows(rows []map[string]any) []map[string]any {
+	if rows == nil {
+		return nil
+	}
+	out := make([]map[string]any, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, cloneMap(row))
+	}
+	return out
+}
+
+func cloneMap(m map[string]any) map[string]any {
+	if m == nil {
+		return nil
+	}
+	out := make(map[string]any, len(m))
+	for k, v := range m {
+		out[k] = v
+	}
+	return out
+}
+
+func cloneColumns(cols []Column) []Column {
+	if cols == nil {
+		return nil
+	}
+	out := make([]Column, len(cols))
+	for i, col := range cols {
+		out[i] = col
+		out[i].Config = cloneMap(col.Config)
+	}
+	return out
+}
+
+func columnsForJS(cols []Column) []map[string]any {
+	if cols == nil {
+		return nil
+	}
+	out := make([]map[string]any, 0, len(cols))
+	for _, col := range cols {
+		out = append(out, map[string]any{
+			"name":   col.Name,
+			"header": col.Header,
+			"config": cloneMap(col.Config),
+		})
+	}
+	return out
 }
 
 // scriptFetch 实现 fetch(url, opts?) -> {status, body, json()}。

@@ -376,3 +376,81 @@ func TestRunScriptTableCanCarryChartAndStringColumns(t *testing.T) {
 		t.Fatalf("table chart 配置错误: %#v", b.Chart)
 	}
 }
+
+func TestRunScriptDatasetAndBlockRefs(t *testing.T) {
+	ctx := scriptContext{blocks: map[string]Block{
+		"sales": {
+			ID:      "sales",
+			Type:    "table",
+			Title:   "销售数据",
+			Columns: []Column{{Name: "业务线", Header: "业务线"}, {Name: "销售额", Header: "销售额"}},
+			Rows:    []map[string]any{{"业务线": "GPT 代付", "销售额": 100}},
+		},
+	}}
+	code := `
+		const rows = dataset('sales')
+		rows[0].销售额 = 200
+		const b = block('sales')
+		result.table({
+			id: 'view',
+			title: b.title,
+			columns: b.columns,
+			rows: b.rows
+		})
+	`
+	blocks, _, _ := runScript(code, ctx)
+	if len(blocks) != 1 {
+		t.Fatalf("got %d blocks", len(blocks))
+	}
+	amt, _ := toFloat(blocks[0].Rows[0]["销售额"])
+	if blocks[0].Title != "销售数据" || amt != 100 {
+		t.Fatalf("block 引用或副本隔离错误: %+v", blocks[0])
+	}
+}
+
+func TestRunScriptDatasetMissingReturnsErrorBlock(t *testing.T) {
+	blocks, _, _ := runScript(`dataset('missing')`, scriptContext{blocks: map[string]Block{}})
+	if len(blocks) != 1 || !strings.Contains(blocks[0].Error, "dataset 未找到") {
+		t.Fatalf("missing dataset 应产生错误区块: %+v", blocks)
+	}
+}
+
+func TestRunHiddenBlockCanBeReferencedByScript(t *testing.T) {
+	setupSQLiteDefault(t)
+	content := `
+-- @id=sales_by_day
+-- @title=每日销售数据
+-- @hidden=true
+SELECT day, pv FROM pv ORDER BY day;
+
+#!SCRIPT
+const rows = dataset('sales_by_day')
+const src = block('sales_by_day')
+result.table({
+  id: 'sales_view',
+  title: src.title,
+  columns: [
+    {name:'day', header:'日期'},
+    {name:'pv', header:'销售额'},
+    {name:'double_pv', header:'销售额 x2'}
+  ],
+  rows: rows.map(r => ({day:r.day, pv:r.pv, double_pv:Number(r.pv)*2}))
+})
+#!END
+`
+	res, err := NewRunner("default").Run(content, nil)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(res.Blocks) != 1 {
+		t.Fatalf("hidden 取数块不应渲染, got %d blocks: %+v", len(res.Blocks), res.Blocks)
+	}
+	b := res.Blocks[0]
+	if b.ID != "sales_view" || b.Title != "每日销售数据" {
+		t.Fatalf("script view 错误: %+v", b)
+	}
+	doublePV, _ := toFloat(b.Rows[0]["double_pv"])
+	if len(b.Rows) != 2 || doublePV != 200 {
+		t.Fatalf("dataset 引用数据错误: %+v", b.Rows)
+	}
+}

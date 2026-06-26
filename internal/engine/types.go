@@ -48,6 +48,7 @@ type Block struct {
 	// RowAttrs 行级样式 (移植自 dataddy attrs[i]['_']): 行号(字符串) -> 行属性。
 	RowAttrs  map[string]*RowAttr `json:"row_attrs,omitempty"`
 	Invisible bool                `json:"invisible,omitempty"` // 隐藏表格主体, 仅保留图表
+	Hidden    bool                `json:"hidden,omitempty"`    // 执行并可被脚本引用, 但不渲染
 	Chart     any                 `json:"chart,omitempty"`
 	Markdown  string              `json:"markdown,omitempty"`
 	SQL       string              `json:"sql,omitempty"`
