@@ -1,0 +1,54 @@
+# 一键启动栈: 拉取 ghcr 预构建镜像 + 自带 MySQL + Redis。
+#
+#   IMAGE=ghcr.io/<owner>/focusbi:latest docker compose -f compose.ghcr.yaml up -d
+#
+# 配置来自挂载的 conf.dev.yaml (APP_ENV=dev 加载)。
+# 注意: conf.dev.yaml 里数据库/Redis 默认指向 127.0.0.1, 容器内连不到 compose 的服务;
+# 用本栈前请把它的 database/redis 地址改成服务名 mysql / redis (或自行用 host 网络)。
+# 生产务必改 conf.dev.yaml 里的 site.jwt_secret / 数据库密码 / site.url。
+services:
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: focusbi
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    volumes:
+      - ./data/mysql:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-proot"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  redis:
+    image: redis:latest
+    volumes:
+      - ./data/redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  app:
+    image: ${IMAGE:-ghcr.io/daodao97/focusbi:latest}
+    command: ["/app/app", "--bind", "0.0.0.0:8080"]
+    environment:
+      APP_ENV: "dev"        # 加载 conf.dev.yaml
+      ENABLE_CRON: "true"   # 启用订阅定时调度
+    ports:
+      - "8080:8080"
+    volumes:
+      # 挂载配置 (含 jwt_secret / 数据源); 改这里即可, 无需重建镜像
+      - ./conf.dev.yaml:/app/conf.dev.yaml:ro
+    depends_on:
+      mysql:
+        condition: service_healthy   # 等 DB ready 再启动 (启动即跑 goose 迁移)
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+# 数据持久化到本地 ./data/ 目录 (绑定挂载); 删库重来直接清空该目录即可。

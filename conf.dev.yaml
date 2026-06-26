@@ -1,0 +1,29 @@
+database:
+  - name: default
+    driver: mysql
+    dsn: root:root@tcp(127.0.0.1:3306)/focusbi?charset=utf8mb4&parseTime=True&loc=Local
+
+redis:
+  - name: default
+    addr: 127.0.0.1:6379
+
+# AI 对话式修改报表。留空则 /api/report/ai 返回“未配置”。
+# provider: claude (Anthropic Messages API, 默认/优先) 或 openai (Chat Completions)。
+# claude 默认 claude-sonnet-4-6 ; openai 默认 gpt-4o-mini
+ai:
+  provider: ""
+  base_url: "" 
+  api_key: ""
+  model: ""           
+
+# Cloudflare Turnstile 登录人机验证。dev 使用 Cloudflare 官方测试 key (始终通过)。
+turnstile:
+  site_key: "1x00000000000000000000AA"
+  secret_key: "1x0000000000000000000000000000000AA"
+
+# 站点 / 服务级配置。
+#   url        站点对外地址 (订阅推送里拼报表链接用)
+#   jwt_secret 登录 token 签名密钥 (必填, 不能为空或默认占位值)。生产用 `openssl rand -hex 32` 生成
+site:
+  url: "http://127.0.0.1:8099"
+  jwt_secret: "focusbi_default_jwt_secret_change_me"

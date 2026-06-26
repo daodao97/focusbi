@@ -1,0 +1,7 @@
+/* 全局基础样式: 去掉浏览器默认 body 边距 (页面最外层白边) */
+html,
+body,
+#app {
+  margin: 0;
+  padding: 0;
+}

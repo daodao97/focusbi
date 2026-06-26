@@ -1,0 +1,27 @@
+.DS_Store
+.vite-ssg-dist
+.vite-ssg-temp
+*.local
+dist/
+node_modules
+.idea/
+.vscode/
+*.log
+build
+
+server.mjs
+.cache
+
+vitesse
+
+.DS_Store
+tmp
+tmp/*
+
+adminui/ui
+
+conf.local.yaml
+kiro2api
+
+# compose.ghcr.yaml 绑定挂载的本地数据目录 (mysql/redis)
+data/

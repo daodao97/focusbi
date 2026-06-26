@@ -1,0 +1,17 @@
+# 仅构建并运行 app; 依赖外部 MySQL + Redis。
+# conf.dev.yaml 默认指向 127.0.0.1, 容器内需改到可达地址 —— 二选一:
+#   A. 用 host 网络: 取消下面 network_mode 注释, 并保持 conf 指向宿主 127.0.0.1;
+#   B. 自带 mysql/redis 服务: 在本文件加 services 并把 conf 改到对应服务名。
+services:
+    app:
+        build:
+            context: .
+            dockerfile: Dockerfile
+            target: final
+        command: ["/app/app", "--bind", "0.0.0.0:8080"]
+        environment:
+            APP_ENV: "${APP_ENV:-prod}"
+            ENABLE_CRON: "true"
+        ports:
+            - "8080:8080"
+        # network_mode: host   # 方案 A: 直连宿主上的 MySQL/Redis
