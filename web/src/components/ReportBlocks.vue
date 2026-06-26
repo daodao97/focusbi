@@ -6,6 +6,12 @@ import { InfoFilled } from '@element-plus/icons-vue'
 // 用异步组件拆分成独立 chunk: 无图表/不看 SQL 的页面不会加载它们。
 const ChartBlock = defineAsyncComponent(() => import('./ChartBlock.vue'))
 const SqlEditor = defineAsyncComponent(() => import('./SqlEditor.vue'))
+// markdown 区块用 vue-stream-markdown 渲染 (与 AI 对话同款); 异步加载, 无 markdown 区块不拉。
+const Markdown = defineAsyncComponent(async () => {
+  await import('vue-stream-markdown/index.css')
+  await import('vue-stream-markdown/theme.css')
+  return (await import('vue-stream-markdown')).Markdown
+})
 
 // 渲染引擎返回的 blocks: 表格 / 图表 / markdown。
 defineProps({
@@ -181,9 +187,12 @@ function summaryCell(b, type, col, idx) {
 
       <el-alert v-if="b.error" type="error" :closable="false" :title="b.error" />
 
-      <template v-else-if="b.type === 'markdown' || b.type === 'raw'">
-        <pre class="md">{{ b.markdown }}</pre>
-      </template>
+      <!-- markdown 区块: 渲染 markdown 语法 (标题/列表/表格/代码等) -->
+      <Markdown v-else-if="b.type === 'markdown'" :content="b.markdown || ''"
+        mode="static" :controls="false" :previewers="false" class="md-body" />
+
+      <!-- raw 区块: 原样输出, 不转 markdown (语义即此) -->
+      <pre v-else-if="b.type === 'raw'" class="md">{{ b.markdown }}</pre>
 
       <template v-else>
         <el-alert v-if="b.notice" :title="b.notice" type="info" :closable="false" class="notice" />
@@ -266,6 +275,10 @@ function summaryCell(b, type, col, idx) {
 .spacer { flex: 1; }
 .notice { margin-bottom: 10px; }
 .md { white-space: pre-wrap; font-family: inherit; margin: 0; color: var(--el-text-color-primary); }
+/* markdown 区块: 渲染后的排版 (标题/列表/表格等); 基础样式来自 vue-stream-markdown 主题 */
+.md-body { font-size: 14px; line-height: 1.7; color: var(--el-text-color-primary); }
+.md-body :deep(table) { border-collapse: collapse; }
+.md-body :deep(th), .md-body :deep(td) { border: 1px solid var(--el-border-color-light); padding: 6px 12px; }
 
 /* 合计 / 平均 汇总条: 与表格列对齐的简易行 */
 .summary { margin-top: 4px; border-top: 2px solid var(--el-border-color); }
