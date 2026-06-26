@@ -199,7 +199,7 @@ defineExpose({ save, reload: load })
 
 <template>
   <div class="editor-page" v-loading="loading" element-loading-text="加载中…">
-    <div v-if="showHeader" class="toolbar">
+    <div v-if="showHeader && !loading" class="toolbar">
       <div class="left">
         <span class="title">{{ report.name }}</span>
         <el-tag v-if="mode === 'preview'" size="small" type="info" style="margin-left:8px">预览中</el-tag>
@@ -239,7 +239,7 @@ defineExpose({ save, reload: load })
     <VersionDrawer v-model="versionOpen" :report-id="report.id" @rollback="onRollback" />
 
     <!-- 编辑模式: 编辑器 + AI 面板 -->
-    <el-row v-show="mode === 'edit'" :gutter="16" class="edit-row">
+    <el-row v-show="mode === 'edit' && !loading" :gutter="16" class="edit-row">
       <el-col :span="15" class="edit-col">
         <el-card shadow="never" class="fill" body-class="card-body">
           <div class="meta">
@@ -266,7 +266,7 @@ defineExpose({ save, reload: load })
     </el-row>
 
     <!-- 预览模式 -->
-    <div v-if="mode === 'preview'" class="sheet" v-loading="previewing">
+    <div v-if="mode === 'preview' && !loading" class="sheet" v-loading="previewing">
       <ReportFilters v-model="params" :filters="preview?.filters || []" :loading="previewing" @run="rerun" />
       <!-- 页面级顶部 HTML 预览 (取编辑器当前值, 预览接口不回传 settings) -->
       <div v-if="prependContent.trim()" class="prepend" v-html="prependContent"></div>
