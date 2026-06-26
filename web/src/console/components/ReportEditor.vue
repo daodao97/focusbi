@@ -35,6 +35,7 @@ const dsnList = ref([])
 const params = ref({})
 const preview = ref(null)
 const previewing = ref(false)
+const loading = ref(true) // 初次加载报表数据时的整体过渡 (默认 true, load 完成置 false)
 const mode = ref('edit') // edit | preview
 const docOpen = ref(false)
 const settingsOpen = ref(false)     // 报表设置模态框
@@ -62,6 +63,12 @@ function editSnapshot() {
 const draftDirty = computed(() => editSnapshot() !== savedSnapshot.value)
 // 报表名不允许为空 (保存/发布的前置条件)。
 const nameValid = computed(() => report.name.trim() !== '')
+// 发布按钮为何不可点 (供 tooltip 解释, 避免误以为是权限/bug)。可点时为空串。
+const publishHint = computed(() => {
+  if (!nameValid.value) return '请先填写报表名称'
+  if (!dirty.value) return '当前草稿与已发布版一致, 无需发布'
+  return ''
+})
 
 // 从 settings JSON 串解析出页面级配置
 function parseSettings(raw) {
@@ -70,27 +77,32 @@ function parseSettings(raw) {
 }
 
 async function load() {
-  dsnList.value = await api.listDsn().catch(() => [])
-  if (props.id) {
-    const r = await api.getReport(Number(props.id))
-    Object.assign(report, r)
-    // 编辑器编辑开发版草稿; 旧数据 dev_content 为空时回退到 content
-    report.content = (r.dev_content != null && r.dev_content !== '') ? r.dev_content : (r.content || '')
-    publishedContent.value = r.content || ''
-    const s = parseSettings(r.settings)
-    autoRefresh.value = Number(s.auto_refresh) || 0
-    prependContent.value = s.prepend_content || ''
-  } else {
-    // 重置为新建态
-    Object.assign(report, { id: 0, name: '新报表', dsn: 'default', content: DEFAULT_CONTENT, parent_id: props.parentId || 0, settings: '' })
-    publishedContent.value = '' // 新报表未发布
-    autoRefresh.value = 0
-    prependContent.value = ''
+  loading.value = true
+  try {
+    dsnList.value = await api.listDsn().catch(() => [])
+    if (props.id) {
+      const r = await api.getReport(Number(props.id))
+      Object.assign(report, r)
+      // 编辑器编辑开发版草稿; 旧数据 dev_content 为空时回退到 content
+      report.content = (r.dev_content != null && r.dev_content !== '') ? r.dev_content : (r.content || '')
+      publishedContent.value = r.content || ''
+      const s = parseSettings(r.settings)
+      autoRefresh.value = Number(s.auto_refresh) || 0
+      prependContent.value = s.prepend_content || ''
+    } else {
+      // 重置为新建态
+      Object.assign(report, { id: 0, name: '新报表', dsn: 'default', content: DEFAULT_CONTENT, parent_id: props.parentId || 0, settings: '' })
+      publishedContent.value = '' // 新报表未发布
+      autoRefresh.value = 0
+      prependContent.value = ''
+    }
+    mode.value = 'edit'
+    preview.value = null
+    params.value = {}
+    savedSnapshot.value = editSnapshot() // 载入即"已保存"基线
+  } finally {
+    loading.value = false
   }
-  mode.value = 'edit'
-  preview.value = null
-  params.value = {}
-  savedSnapshot.value = editSnapshot() // 载入即"已保存"基线
 }
 
 async function doPreview() {
@@ -186,7 +198,7 @@ defineExpose({ save, reload: load })
 </script>
 
 <template>
-  <div class="editor-page">
+  <div class="editor-page" v-loading="loading" element-loading-text="加载中…">
     <div v-if="showHeader" class="toolbar">
       <div class="left">
         <span class="title">{{ report.name }}</span>
@@ -202,12 +214,22 @@ defineExpose({ save, reload: load })
         <template v-if="mode === 'edit'">
           <el-button :loading="previewing" @click="doPreview">预览</el-button>
           <el-button :disabled="!draftDirty || !nameValid" @click="save">保存草稿</el-button>
-          <el-button type="primary" :disabled="!dirty || !nameValid" :loading="publishing" @click="publish">发布</el-button>
+          <el-tooltip :content="publishHint" :disabled="!publishHint" placement="top">
+            <span>
+              <el-button type="primary" :disabled="!dirty || !nameValid" :loading="publishing"
+                :style="(!dirty || !nameValid) ? 'pointer-events:none' : ''" @click="publish">发布</el-button>
+            </span>
+          </el-tooltip>
         </template>
         <template v-else>
           <el-button @click="cancelPreview">取消预览</el-button>
           <el-button :disabled="!draftDirty || !nameValid" @click="save">保存草稿</el-button>
-          <el-button type="primary" :disabled="!dirty || !nameValid" :loading="publishing" @click="publish">发布</el-button>
+          <el-tooltip :content="publishHint" :disabled="!publishHint" placement="top">
+            <span>
+              <el-button type="primary" :disabled="!dirty || !nameValid" :loading="publishing"
+                :style="(!dirty || !nameValid) ? 'pointer-events:none' : ''" @click="publish">发布</el-button>
+            </span>
+          </el-tooltip>
         </template>
         <el-button v-if="showBack" @click="emit('back')">取消</el-button>
       </div>
