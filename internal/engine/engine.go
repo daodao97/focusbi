@@ -267,6 +267,10 @@ func (g *mergeGroup) finalize() Block {
 		block.Chart = normalizeChart(chart, cols)
 	}
 
+	if kpi, ok := rb.annotations["kpi"]; ok {
+		block.Kpi = parseKpiConfig(kpi)
+	}
+
 	if title := annotationString(rb, "title"); title != "" {
 		block.Title = title
 	}

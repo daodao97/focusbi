@@ -237,6 +237,9 @@ func tableFromJS(vm *goja.Runtime, arg goja.Value) Block {
 	if chart, ok := spec["chart"]; ok {
 		blk.Chart = normalizeChart(chart, columnNames(blk.Columns))
 	}
+	if kpi, ok := spec["kpi"]; ok {
+		blk.Kpi = parseKpiConfig(kpi)
+	}
 
 	// 复用列级处理链: columns[].config 的 tag/enum/percent/date 等生效, 支持 row_tag / sum / avg。
 	applyColumnPipeline(&blk, spec["row_tag"], cast.ToBool(spec["sum"]), cast.ToBool(spec["avg"]))
@@ -592,6 +595,7 @@ func blockForJS(b Block) map[string]any {
 		"summary":    cloneMap(b.Summary),
 		"average":    cloneMap(b.Average),
 		"chart":      b.Chart,
+		"kpi":        b.Kpi,
 		"sql":        b.SQL,
 		"error":      b.Error,
 		"invisible":  b.Invisible,

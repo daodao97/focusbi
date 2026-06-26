@@ -50,6 +50,7 @@ type Block struct {
 	Invisible bool                `json:"invisible,omitempty"` // 隐藏表格主体, 仅保留图表
 	Hidden    bool                `json:"hidden,omitempty"`    // 执行并可被脚本引用, 但不渲染
 	Chart     any                 `json:"chart,omitempty"`
+	Kpi       *KpiConfig          `json:"kpi,omitempty"` // KPI 卡片 (值 + 同环比 + 迷你趋势)
 	Markdown  string              `json:"markdown,omitempty"`
 	SQL       string              `json:"sql,omitempty"`
 	// Messages 波动检测等产出的告警消息 (移植自 dataddy report['message']); 供订阅推送读取。
@@ -82,10 +83,27 @@ type Result struct {
 
 // ChartConfig 是规整后的图表配置, 交给前端 ECharts 渲染。
 type ChartConfig struct {
-	Type   string   `json:"type"`             // line / bar / pie
-	X      string   `json:"x,omitempty"`      // x 轴字段 (折线/柱状)
-	Series []string `json:"series,omitempty"` // 数值字段
-	Name   string   `json:"name,omitempty"`   // 饼图: 分类字段
-	Value  string   `json:"value,omitempty"`  // 饼图: 数值字段
+	Type   string   `json:"type"`             // line / bar / area / pie / scatter / funnel / gauge / radar
+	X      string   `json:"x,omitempty"`      // x 轴字段 (折线/柱状/面积/散点)
+	Y      string   `json:"y,omitempty"`      // 散点: y 轴字段
+	Series []string `json:"series,omitempty"` // 数值字段 (折线/柱状/面积/雷达)
+	Name   string   `json:"name,omitempty"`   // 饼图/漏斗: 分类字段
+	Value  string   `json:"value,omitempty"`  // 饼图/漏斗/仪表盘: 数值字段
+	Stack  bool     `json:"stack,omitempty"`  // 柱状/面积: 堆叠
 	Auto   bool     `json:"auto,omitempty"`   // __auto__
+}
+
+// KpiConfig 是一组 KPI 卡片, 交给前端 KpiBlock 渲染。数据本身复用 block.Rows。
+type KpiConfig struct {
+	Items []KpiItem `json:"items"`
+}
+
+// KpiItem 是一张 KPI 卡片。Value/Compare/Trend 均为列名, 前端按列名从 block.Rows 自取。
+type KpiItem struct {
+	Label   string `json:"label"`             // 卡片标题
+	Value   string `json:"value"`             // 当前值列名 (取数据末行)
+	Compare string `json:"compare,omitempty"` // 对比基准列名 (算同环比)
+	Format  string `json:"format,omitempty"`  // money/number/integer/percent (口径同列配置 format)
+	Trend   string `json:"trend,omitempty"`   // sparkline 取值列名 (整列序列)
+	Unit    string `json:"unit,omitempty"`    // 单位后缀
 }

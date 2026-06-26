@@ -6,6 +6,7 @@ import { copyText } from '@/clipboard'
 // ChartBlock(ECharts ~1MB) 与 SqlEditor(Monaco ~3MB) 体积大且仅按需出现,
 // 用异步组件拆分成独立 chunk: 无图表/不看 SQL 的页面不会加载它们。
 const ChartBlock = defineAsyncComponent(() => import('./ChartBlock.vue'))
+const KpiBlock = defineAsyncComponent(() => import('./KpiBlock.vue'))
 const SqlEditor = defineAsyncComponent(() => import('./SqlEditor.vue'))
 // markdown 区块用 vue-stream-markdown 渲染 (与 AI 对话同款); 异步加载, 无 markdown 区块不拉。
 const Markdown = defineAsyncComponent(async () => {
@@ -196,6 +197,9 @@ function summaryCell(b, type, col, idx) {
 
       <template v-else>
         <el-alert v-if="b.notice" :title="b.notice" type="info" :closable="false" class="notice" />
+
+        <KpiBlock v-if="b.kpi && b.kpi.items && b.kpi.items.length && b.rows && b.rows.length"
+          :kpi="b.kpi" :rows="b.rows" />
 
         <ChartBlock v-if="b.chart && b.rows && b.rows.length" :chart="b.chart" :rows="b.rows" />
 
