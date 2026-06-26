@@ -22,6 +22,8 @@ const dsnRows = computed(() => [
 ])
 // 配了全局 dsn 只读/读写即覆盖所有源, 此时无需逐个勾
 const dsnAllReadable = computed(() => (form.perms['dsn'] || '').includes('r'))
+// 配了「全部报表」(Rr/Rrw) 即递归覆盖所有报表, 此时无需按文件夹/报表逐个授权
+const reportAllGranted = computed(() => !!(form.perms['report'] || ''))
 
 // form.perms: { 资源串 -> mode字符串 }
 const form = reactive({ id: 0, name: '', parent_id: 0, remark: '', perms: {} })
@@ -161,7 +163,8 @@ onMounted(load)
           <div class="hint">递归授予所有报表; 也可在下方按单个报表精细控制。</div>
         </el-form-item>
         <el-form-item label="按文件夹/报表">
-          <div class="report-grid">
+          <div v-if="reportAllGranted" class="muted">已授予「全部报表」, 无需逐个设置。</div>
+          <div v-else class="report-grid">
             <PermTree v-if="reportTree.length" :nodes="reportTree" :perms="form.perms" />
             <div v-else class="muted">暂无报表</div>
           </div>
