@@ -3,6 +3,7 @@
 package datasource
 
 import (
+	"context"
 	"database/sql"
 	"database/sql/driver"
 	"errors"
@@ -239,7 +240,7 @@ func queryOnce(name, query string, args ...any) (*QueryResult, error) {
 
 	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
-		return nil, err
+		return nil, formatQueryError(err)
 	}
 	defer rows.Close()
 
@@ -266,9 +267,37 @@ func queryOnce(name, query string, args ...any) (*QueryResult, error) {
 		result.Rows = append(result.Rows, row)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, err
+		return nil, formatQueryError(err)
 	}
 	return result, nil
+}
+
+func formatQueryError(err error) error {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return fmt.Errorf("SQL 查询超时（超过 %s）", formatDurationCN(conf.Get().QueryTimeoutDuration()))
+	}
+	return err
+}
+
+func formatDurationCN(d time.Duration) string {
+	if d <= 0 {
+		return d.String()
+	}
+	if d%time.Hour == 0 {
+		return fmt.Sprintf("%d小时", int(d/time.Hour))
+	}
+	if d%time.Minute == 0 {
+		return fmt.Sprintf("%d分钟", int(d/time.Minute))
+	}
+	if d%time.Second == 0 {
+		min := d / time.Minute
+		sec := (d % time.Minute) / time.Second
+		if min > 0 {
+			return fmt.Sprintf("%d分%d秒", int(min), int(sec))
+		}
+		return fmt.Sprintf("%d秒", int(sec))
+	}
+	return d.String()
 }
 
 // isBadConnErr 判断错误是否为连接层失效 (值得失效缓存并重试)。

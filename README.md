@@ -197,6 +197,7 @@ export FOCUSBI_TOKEN="fbt_xxxxx"
   - `site.url` —— 站点对外地址, 用于订阅推送里拼报表链接。
 - `database` —— 主库 (`default`, MySQL) 与连接串。
 - `redis` —— 缓存 / 分布式锁 (订阅调度多实例去重需要)。
+- `engine.query_timeout` —— 单次 SQL 查询超时, 默认 `3m`, 支持 `30s` / `3m` 这类 Go duration。
 - `ai` —— AI provider (`claude` / `openai`)、`base_url`、`api_key`、`model`。
   仅从配置文件读取, 不走环境变量。
 - `turnstile` —— 登录人机验证 (Cloudflare Turnstile)。

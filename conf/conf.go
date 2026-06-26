@@ -3,6 +3,7 @@ package conf
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/daodao97/xgo/xapp"
 	"github.com/daodao97/xgo/xdb"
@@ -38,12 +39,20 @@ type SiteConf struct {
 	JWTSecret string `json:"jwt_secret" yaml:"jwt_secret"`
 }
 
+// EngineConf 是报表执行引擎配置。
+type EngineConf struct {
+	// QueryTimeout 单次数据源查询超时, Go duration 字符串, 如 "30s" / "3m"。
+	// 为空或非法时使用默认值。
+	QueryTimeout string `json:"query_timeout" yaml:"query_timeout"`
+}
+
 type Conf struct {
 	Database  []xdb.Config     `json:"database" yaml:"database" envPrefix:"DATABASE"`
 	Redis     []xredis.Options `json:"redis" yaml:"redis" envPrefix:"REDIS"`
 	AI        AIConf           `json:"ai" yaml:"ai"`
 	Turnstile TurnstileConf    `json:"turnstile" yaml:"turnstile"`
 	Site      SiteConf         `json:"site" yaml:"site"`
+	Engine    EngineConf       `json:"engine" yaml:"engine"`
 }
 
 // SiteBaseURL 返回站点地址 (去掉尾部斜杠), 仅从配置读取。
@@ -58,6 +67,24 @@ func (c *Conf) JWTSecretOrDefault() string {
 		return s
 	}
 	return defaultJWTSecret
+}
+
+const defaultQueryTimeout = 3 * time.Minute
+
+// QueryTimeoutDuration 返回单次数据源查询超时。未配置/非法/非正数时回退到默认 3 分钟。
+func (c *Conf) QueryTimeoutDuration() time.Duration {
+	if c == nil {
+		return defaultQueryTimeout
+	}
+	s := strings.TrimSpace(c.Engine.QueryTimeout)
+	if s == "" {
+		return defaultQueryTimeout
+	}
+	d, err := time.ParseDuration(s)
+	if err != nil || d <= 0 {
+		return defaultQueryTimeout
+	}
+	return d
 }
 
 var ConfInstance *Conf

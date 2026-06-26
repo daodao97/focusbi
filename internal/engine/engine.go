@@ -138,6 +138,10 @@ func (r *Runner) Run(content string, params map[string]string) (*Result, error) 
 // 返回定型后的列、行、是否转置、最终 SQL 与错误串 (空表示无错)。
 // 展示阶段 (列配置/chart/sum/波动/notice) 留待合并完成后由 mergeGroup.finalize 处理。
 func (r *Runner) runSQLData(rb *rawBlock, sql string) (cols []string, rows []map[string]any, flipped bool, finalSQL string, errStr string) {
+	if err := validateReadOnlySQL(sql); err != nil {
+		return nil, nil, false, sql, err.Error()
+	}
+
 	// 自动补 LIMIT (默认 1000), 防止误查全表。可用 -- @limit=N 覆盖, 0 表示不限制。
 	sql = injectLimit(sql, annotationInt(rb, "limit", 1000))
 	finalSQL = sql

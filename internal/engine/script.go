@@ -114,6 +114,9 @@ func injectScriptAPI(vm *goja.Runtime, ctx scriptContext, acc *scriptResult) {
 		ttlSec := 0
 		dsn, ttlSec = scriptQueryOptions(call.Argument(2), dsn, ttlSec)
 		dsn, ttlSec = scriptQueryOptions(call.Argument(3), dsn, ttlSec)
+		if err := validateReadOnlySQL(sql); err != nil {
+			panic(vm.ToValue(err.Error()))
+		}
 		// 数据源授权: 脚本可指定任意 dsn, 必须校验。
 		if ctx.authz != nil {
 			if err := ctx.authz(dsn); err != nil {

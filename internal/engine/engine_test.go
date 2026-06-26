@@ -287,6 +287,57 @@ func TestInjectLimit(t *testing.T) {
 	}
 }
 
+func TestValidateReadOnlySQL(t *testing.T) {
+	valid := []string{
+		"SELECT 1",
+		"select 'delete; drop' AS txt;",
+		"WITH x AS (SELECT 1) SELECT * FROM x",
+		"/* comment */ SELECT * FROM t",
+	}
+	for _, sql := range valid {
+		if err := validateReadOnlySQL(sql); err != nil {
+			t.Fatalf("valid SQL rejected: %q: %v", sql, err)
+		}
+	}
+
+	invalid := []string{
+		"UPDATE users SET name = 'x'",
+		"DELETE FROM users",
+		"DROP TABLE users",
+		"SELECT 1; SELECT 2",
+		"WITH moved AS (DELETE FROM users RETURNING id) SELECT * FROM moved",
+	}
+	for _, sql := range invalid {
+		if err := validateReadOnlySQL(sql); err == nil {
+			t.Fatalf("invalid SQL accepted: %q", sql)
+		}
+	}
+}
+
+func TestRunRejectsWriteSQLBlock(t *testing.T) {
+	setupSQLiteDefault(t)
+	res, err := NewRunner("default").Run("WITH moved AS (DELETE FROM pv RETURNING day) SELECT * FROM moved;", nil)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(res.Blocks) != 1 || !strings.Contains(res.Blocks[0].Error, "不允许使用 DELETE") {
+		t.Fatalf("write SQL should be rejected, blocks=%+v", res.Blocks)
+	}
+}
+
+func TestRunScriptQueryRejectsWriteSQL(t *testing.T) {
+	setupSQLiteDefault(t)
+	res, err := NewRunner("default").Run(`#!SCRIPT
+query('UPDATE pv SET pv = 1')
+#!END`, nil)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(res.Blocks) != 1 || !strings.Contains(res.Blocks[0].Error, "仅支持只读") {
+		t.Fatalf("script write query should be rejected, blocks=%+v", res.Blocks)
+	}
+}
+
 func TestParseMergeCell(t *testing.T) {
 	got := parseMergeCell("report_month, business_line ,")
 	if len(got) != 2 || got[0] != "report_month" || got[1] != "business_line" {

@@ -7,6 +7,11 @@ redis:
   - name: default
     addr: 127.0.0.1:6379
 
+# 报表执行引擎配置。
+# query_timeout 单次 SQL 查询超时, 支持 Go duration, 如 "30s" / "3m"。
+engine:
+  query_timeout: "3m"
+
 # AI 对话式修改报表。留空则 /api/report/ai 返回“未配置”。
 # provider: claude (Anthropic Messages API, 默认/优先) 或 openai (Chat Completions)。
 # claude 默认 claude-sonnet-4-6 ; openai 默认 gpt-4o-mini
