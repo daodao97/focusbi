@@ -65,7 +65,15 @@ curl -fsSL https://raw.githubusercontent.com/daodao97/focusbi/main/deploy/instal
 | `FOCUSBI_PORT` | `8080` | 宿主机端口 |
 | `ENABLE_CRON` | `true` | 是否启用订阅调度 |
 | `SITE_URL` | `http://127.0.0.1:<port>` | 外部访问地址 |
-| `JWT_SECRET` | 自动生成 | 登录令牌签名密钥 |
+| `SITE_JWT_SECRET` | 自动生成 | 登录令牌签名密钥 |
+| `JWT_SECRET` | 自动生成 | `SITE_JWT_SECRET` 的兼容别名 |
+| `ENGINE_QUERY_TIMEOUT` | `3m` | 单次 SQL 查询超时 |
+| `AI_PROVIDER` | 空 | AI provider, 如 `claude` / `openai` |
+| `AI_BASE_URL` | 空 | AI 服务地址 |
+| `AI_API_KEY` | 空 | AI API Key |
+| `AI_MODEL` | 空 | AI 模型名 |
+| `TURNSTILE_SITE_KEY` | 空 | Cloudflare Turnstile site key |
+| `TURNSTILE_SECRET_KEY` | 空 | Cloudflare Turnstile secret key |
 | `MYSQL_ROOT_PASSWORD` | 自动生成 | `stack` 模式 MySQL root 密码 |
 | `MYSQL_DSN` | 交互输入 | `external` 模式 MySQL DSN |
 | `REDIS_ADDR` | 交互输入 | `external` 模式 Redis 地址 |

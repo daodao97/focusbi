@@ -21,6 +21,7 @@ tmp/*
 adminui/ui
 
 conf.local.yaml
+.env
 kiro2api
 
 # compose.ghcr.yaml 绑定挂载的本地数据目录 (mysql/redis)

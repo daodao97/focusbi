@@ -223,9 +223,8 @@ provider, **默认优先 claude**:
 - `claude` — Anthropic Messages API (`/v1/messages`), 默认模型 `claude-sonnet-4-6`
 - `openai` — Chat Completions (`/v1/chat/completions`), 默认模型 `gpt-4o-mini`
 
-配置**只读 `conf.dev.yaml` 的 `ai` 段** (`provider` / `base_url` / `api_key` / `model`),
-不再支持环境变量覆盖 —— 避免本机 shell 里残留的 `ANTHROPIC_*` / `OPENAI_*` 误覆盖
-配置文件里正确的密钥。示例:
+配置读取 `conf.dev.yaml` 的 `ai` 段 (`provider` / `base_url` / `api_key` / `model`),
+也支持用 `AI_PROVIDER`、`AI_BASE_URL`、`AI_API_KEY`、`AI_MODEL` 覆盖。示例:
 
 ```yaml
 ai:

@@ -132,6 +132,15 @@ services:
     environment:
       APP_ENV: "dev"
       ENABLE_CRON: "${ENABLE_CRON}"
+      SITE_URL: "${SITE_URL}"
+      SITE_JWT_SECRET: "${SITE_JWT_SECRET}"
+      ENGINE_QUERY_TIMEOUT: "${ENGINE_QUERY_TIMEOUT}"
+      AI_PROVIDER: "${AI_PROVIDER}"
+      AI_BASE_URL: "${AI_BASE_URL}"
+      AI_API_KEY: "${AI_API_KEY}"
+      AI_MODEL: "${AI_MODEL}"
+      TURNSTILE_SITE_KEY: "${TURNSTILE_SITE_KEY}"
+      TURNSTILE_SECRET_KEY: "${TURNSTILE_SECRET_KEY}"
     ports:
       - "${FOCUSBI_PORT}:8080"
     volumes:
@@ -154,6 +163,15 @@ services:
     environment:
       APP_ENV: "dev"
       ENABLE_CRON: "${ENABLE_CRON}"
+      SITE_URL: "${SITE_URL}"
+      SITE_JWT_SECRET: "${SITE_JWT_SECRET}"
+      ENGINE_QUERY_TIMEOUT: "${ENGINE_QUERY_TIMEOUT}"
+      AI_PROVIDER: "${AI_PROVIDER}"
+      AI_BASE_URL: "${AI_BASE_URL}"
+      AI_API_KEY: "${AI_API_KEY}"
+      AI_MODEL: "${AI_MODEL}"
+      TURNSTILE_SITE_KEY: "${TURNSTILE_SITE_KEY}"
+      TURNSTILE_SECRET_KEY: "${TURNSTILE_SECRET_KEY}"
     ports:
       - "${FOCUSBI_PORT}:8080"
     volumes:
@@ -167,6 +185,7 @@ app_config() {
   local redis_addr="$2"
   local site_url="$3"
   local jwt_secret="$4"
+  local query_timeout="$5"
   cat <<YAML
 database:
   - name: default
@@ -178,7 +197,7 @@ redis:
     addr: $(yaml_dq "$redis_addr")
 
 engine:
-  query_timeout: "3m"
+  query_timeout: $(yaml_dq "$query_timeout")
 
 ai:
   provider: ""
@@ -201,11 +220,12 @@ main() {
   local compose
   compose="$(compose_cmd)"
 
-  local install_dir image port enable_cron mode raw_mode site_url jwt_secret
+  local install_dir image port enable_cron query_timeout mode raw_mode site_url jwt_secret
   install_dir="${FOCUSBI_INSTALL_DIR:-$(ask 'Install directory' "$DEFAULT_DIR")}"
   image="${FOCUSBI_IMAGE:-$(ask 'Docker image' "$DEFAULT_IMAGE")}"
   port="${FOCUSBI_PORT:-$(ask 'Host port' "$DEFAULT_PORT")}"
   enable_cron="${ENABLE_CRON:-$(ask 'Enable subscription scheduler? true/false' 'true')}"
+  query_timeout="${ENGINE_QUERY_TIMEOUT:-$(ask 'SQL query timeout' '3m')}"
 
   if [[ -n "${FOCUSBI_MODE:-}" ]]; then
     mode="$(normalize_mode "$FOCUSBI_MODE")"
@@ -224,7 +244,10 @@ main() {
   mkdir -p data
 
   site_url="${SITE_URL:-$(ask 'Public site URL' "http://127.0.0.1:${port}")}"
-  jwt_secret="${JWT_SECRET:-$(ask_secret 'JWT secret' "$(random_hex 32)")}"
+  jwt_secret="${SITE_JWT_SECRET:-}"
+  if [[ -z "$jwt_secret" ]]; then
+    jwt_secret="${JWT_SECRET:-$(ask_secret 'JWT secret' "$(random_hex 32)")}"
+  fi
 
   local mysql_dsn redis_addr mysql_root_password
   if [[ "$mode" == "stack" ]]; then
@@ -234,6 +257,15 @@ main() {
     write_file ".env" "FOCUSBI_IMAGE=${image}
 FOCUSBI_PORT=${port}
 ENABLE_CRON=${enable_cron}
+SITE_URL=${site_url}
+SITE_JWT_SECRET=${jwt_secret}
+ENGINE_QUERY_TIMEOUT=${query_timeout}
+AI_PROVIDER=${AI_PROVIDER:-}
+AI_BASE_URL=${AI_BASE_URL:-}
+AI_API_KEY=${AI_API_KEY:-}
+AI_MODEL=${AI_MODEL:-}
+TURNSTILE_SITE_KEY=${TURNSTILE_SITE_KEY:-}
+TURNSTILE_SECRET_KEY=${TURNSTILE_SECRET_KEY:-}
 MYSQL_ROOT_PASSWORD=${mysql_root_password}"
     write_file "docker-compose.yml" "$(stack_compose)"
   else
@@ -241,11 +273,20 @@ MYSQL_ROOT_PASSWORD=${mysql_root_password}"
     redis_addr="${REDIS_ADDR:-$(ask 'Redis addr' 'redis.example.com:6379')}"
     write_file ".env" "FOCUSBI_IMAGE=${image}
 FOCUSBI_PORT=${port}
-ENABLE_CRON=${enable_cron}"
+ENABLE_CRON=${enable_cron}
+SITE_URL=${site_url}
+SITE_JWT_SECRET=${jwt_secret}
+ENGINE_QUERY_TIMEOUT=${query_timeout}
+AI_PROVIDER=${AI_PROVIDER:-}
+AI_BASE_URL=${AI_BASE_URL:-}
+AI_API_KEY=${AI_API_KEY:-}
+AI_MODEL=${AI_MODEL:-}
+TURNSTILE_SITE_KEY=${TURNSTILE_SITE_KEY:-}
+TURNSTILE_SECRET_KEY=${TURNSTILE_SECRET_KEY:-}"
     write_file "docker-compose.yml" "$(external_compose)"
   fi
 
-  write_file "conf.dev.yaml" "$(app_config "$mysql_dsn" "$redis_addr" "$site_url" "$jwt_secret")"
+  write_file "conf.dev.yaml" "$(app_config "$mysql_dsn" "$redis_addr" "$site_url" "$jwt_secret" "$query_timeout")"
   write_file "README.deploy.md" "FocusBI deployment
 
 Commands:

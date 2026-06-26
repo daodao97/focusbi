@@ -300,8 +300,11 @@ bearer_token_env_var = "FOCUSBI_TOKEN"
 - `redis` —— 缓存 / 分布式锁 (订阅调度多实例去重需要)。
 - `engine.query_timeout` —— 单次 SQL 查询超时, 默认 `3m`, 支持 `30s` / `3m` 这类 Go duration。
 - `ai` —— AI provider (`claude` / `openai`)、`base_url`、`api_key`、`model`。
-  仅从配置文件读取, 不走环境变量。
 - `turnstile` —— 登录人机验证 (Cloudflare Turnstile)。
+
+启动时会读取当前目录 `.env`, 再加载 `conf.dev.yaml`, 最后用环境变量覆盖支持 env tag 的配置。
+常用覆盖项是 `SITE_JWT_SECRET`、`SITE_URL`、`ENGINE_QUERY_TIMEOUT`、`AI_API_KEY`、
+`TURNSTILE_SECRET_KEY`; 已存在的系统环境变量优先于 `.env`。
 
 ## 技术栈
 

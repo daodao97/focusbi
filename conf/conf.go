@@ -2,12 +2,14 @@ package conf
 
 import (
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
 	"github.com/daodao97/xgo/xapp"
 	"github.com/daodao97/xgo/xdb"
 	"github.com/daodao97/xgo/xredis"
+	"github.com/joho/godotenv"
 )
 
 // defaultJWTSecret 是未配置时的占位密钥; 用它签名等于谁都能伪造 token,
@@ -17,42 +19,42 @@ const defaultJWTSecret = "focusbi_default_jwt_secret_change_me"
 // AIConf 配置对话式报表修改使用的大模型服务。
 // Provider 决定 Eino 使用的 provider: claude/anthropic (默认/优先) 或 openai。
 type AIConf struct {
-	Provider string `json:"provider" yaml:"provider"` // claude | anthropic | openai
-	BaseURL  string `json:"base_url" yaml:"base_url"`
-	APIKey   string `json:"api_key" yaml:"api_key"`
-	Model    string `json:"model" yaml:"model"`
+	Provider string `json:"provider" yaml:"provider" env:"PROVIDER"` // claude | anthropic | openai
+	BaseURL  string `json:"base_url" yaml:"base_url" env:"BASE_URL"`
+	APIKey   string `json:"api_key" yaml:"api_key" env:"API_KEY"`
+	Model    string `json:"model" yaml:"model" env:"MODEL"`
 }
 
 // TurnstileConf 配置 Cloudflare Turnstile 登录人机验证。
 // 同时配置 site_key 与 secret_key 后启用; 未配置时本地开发不受影响。
 type TurnstileConf struct {
-	SiteKey   string `json:"site_key" yaml:"site_key"`
-	SecretKey string `json:"secret_key" yaml:"secret_key"`
+	SiteKey   string `json:"site_key" yaml:"site_key" env:"SITE_KEY"`
+	SecretKey string `json:"secret_key" yaml:"secret_key" env:"SECRET_KEY"`
 }
 
 // SiteConf 是站点 / 服务级配置。
 type SiteConf struct {
 	// URL 站点对外可访问地址 (如 https://bi.example.com), 用于订阅推送里拼报表查看链接。
 	// 留空时推送消息不带链接。
-	URL string `json:"url" yaml:"url"`
+	URL string `json:"url" yaml:"url" env:"URL"`
 	// JWTSecret 登录 token 的签名密钥 (必填)。为空或默认占位值时拒绝启动 (见 Init)。
-	JWTSecret string `json:"jwt_secret" yaml:"jwt_secret"`
+	JWTSecret string `json:"jwt_secret" yaml:"jwt_secret" env:"JWT_SECRET"`
 }
 
 // EngineConf 是报表执行引擎配置。
 type EngineConf struct {
 	// QueryTimeout 单次数据源查询超时, Go duration 字符串, 如 "30s" / "3m"。
 	// 为空或非法时使用默认值。
-	QueryTimeout string `json:"query_timeout" yaml:"query_timeout"`
+	QueryTimeout string `json:"query_timeout" yaml:"query_timeout" env:"QUERY_TIMEOUT"`
 }
 
 type Conf struct {
 	Database  []xdb.Config     `json:"database" yaml:"database" envPrefix:"DATABASE"`
 	Redis     []xredis.Options `json:"redis" yaml:"redis" envPrefix:"REDIS"`
-	AI        AIConf           `json:"ai" yaml:"ai"`
-	Turnstile TurnstileConf    `json:"turnstile" yaml:"turnstile"`
-	Site      SiteConf         `json:"site" yaml:"site"`
-	Engine    EngineConf       `json:"engine" yaml:"engine"`
+	AI        AIConf           `json:"ai" yaml:"ai" envPrefix:"AI_"`
+	Turnstile TurnstileConf    `json:"turnstile" yaml:"turnstile" envPrefix:"TURNSTILE_"`
+	Site      SiteConf         `json:"site" yaml:"site" envPrefix:"SITE_"`
+	Engine    EngineConf       `json:"engine" yaml:"engine" envPrefix:"ENGINE_"`
 }
 
 // SiteBaseURL 返回站点地址 (去掉尾部斜杠), 仅从配置读取。
@@ -92,6 +94,10 @@ var ConfInstance *Conf
 func Init() error {
 	ConfInstance = &Conf{}
 
+	if err := loadDotEnv(".env"); err != nil {
+		return err
+	}
+
 	err := xapp.InitConf(ConfInstance)
 	if err != nil {
 		return err
@@ -102,6 +108,16 @@ func Init() error {
 		return err
 	}
 
+	return nil
+}
+
+func loadDotEnv(path string) error {
+	if err := godotenv.Load(path); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("读取 .env 失败: %w", err)
+	}
 	return nil
 }
 
