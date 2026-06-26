@@ -2,6 +2,7 @@
 import { ref, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { api } from '@/api'
+import { copyText } from '@/clipboard'
 import DocDrawer from '@/components/DocDrawer.vue'
 
 const list = ref([])
@@ -53,10 +54,9 @@ async function submit() {
 }
 
 async function copyPlain() {
-  try {
-    await navigator.clipboard.writeText(plainToken.value)
+  if (await copyText(plainToken.value)) {
     ElMessage.success('已复制到剪贴板')
-  } catch {
+  } else {
     ElMessage.warning('复制失败, 请手动选择复制')
   }
 }

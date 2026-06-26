@@ -3,6 +3,7 @@ import { ref, reactive, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Refresh } from '@element-plus/icons-vue'
 import { api } from '@/api'
+import { copyText } from '@/clipboard'
 
 // 生成一个 16 位强随机密码 (大小写字母 + 数字 + 符号), 用 crypto 取随机。
 function genPassword(len = 16) {
@@ -24,10 +25,9 @@ const roleName = (id) => roles.value.find(r => r.id === id)?.name || id
 async function fillRandomPassword() {
   const pwd = genPassword()
   form.password = pwd
-  try {
-    await navigator.clipboard.writeText(pwd)
+  if (await copyText(pwd)) {
     ElMessage.success('已生成并复制到剪贴板')
-  } catch {
+  } else {
     ElMessage.success('已生成随机密码')
   }
 }

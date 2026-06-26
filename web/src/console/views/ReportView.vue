@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { VideoPlay, VideoPause } from '@element-plus/icons-vue'
 import { api } from '@/api'
+import { copyText } from '@/clipboard'
 import { canManageReports } from '@/perm'
 import { paramsToQuery, queryToParams, sameQuery } from '@/params'
 import { useAutoRefresh } from '@/autorefresh'
@@ -86,10 +87,9 @@ async function toggleShare(enable) {
 }
 
 async function copyShareUrl() {
-  try {
-    await navigator.clipboard.writeText(shareUrl())
+  if (await copyText(shareUrl())) {
     ElMessage.success('链接已复制')
-  } catch {
+  } else {
     ElMessage.error('复制失败')
   }
 }

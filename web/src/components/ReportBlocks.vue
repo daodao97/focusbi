@@ -2,6 +2,7 @@
 import { ref, defineAsyncComponent } from 'vue'
 import { ElMessage } from 'element-plus'
 import { InfoFilled } from '@element-plus/icons-vue'
+import { copyText } from '@/clipboard'
 // ChartBlock(ECharts ~1MB) 与 SqlEditor(Monaco ~3MB) 体积大且仅按需出现,
 // 用异步组件拆分成独立 chunk: 无图表/不看 SQL 的页面不会加载它们。
 const ChartBlock = defineAsyncComponent(() => import('./ChartBlock.vue'))
@@ -30,10 +31,9 @@ function showSql(b) {
 }
 
 async function copySql() {
-  try {
-    await navigator.clipboard.writeText(sqlText.value)
+  if (await copyText(sqlText.value)) {
     ElMessage.success('已复制 SQL')
-  } catch {
+  } else {
     ElMessage.error('复制失败')
   }
 }
