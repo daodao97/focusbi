@@ -2,6 +2,7 @@ package mcpserver
 
 import (
 	"context"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -105,6 +106,48 @@ func TestListReportsFilteredByPermission(t *testing.T) {
 	_, out2, _ := listReportsTool(roCtx, nil, emptyIn{})
 	if len(out2.Reports) == 0 {
 		t.Fatal("有读权限应能看到报表")
+	}
+}
+
+func TestReportURLFromSiteConfig(t *testing.T) {
+	setupTestDB(t)
+	conf.Get().Site.URL = "https://bi.example.com/" // 尾部斜杠应被 SiteBaseURL 去掉
+	rwCtx := ctxWithPerm(map[string]string{"report.manage": "rw", "report": "Rr"})
+
+	// 报表 -> 控制台查看链接 + 编辑链接
+	_, created, err := createReportTool(rwCtx, nil, createReportIn{Name: "r1"})
+	if err != nil {
+		t.Fatalf("create report: %v", err)
+	}
+	wantView := "https://bi.example.com/index.html#/reports/" + strconv.Itoa(created.ID)
+	if created.URL != wantView {
+		t.Errorf("create url = %q, want %q", created.URL, wantView)
+	}
+	_, got, err := getReportTool(rwCtx, nil, getReportIn{ID: created.ID})
+	if err != nil {
+		t.Fatalf("get report: %v", err)
+	}
+	if got.URL != wantView {
+		t.Errorf("get url = %q, want %q", got.URL, wantView)
+	}
+	if got.EditURL != wantView+"/edit" {
+		t.Errorf("get edit_url = %q, want %q", got.EditURL, wantView+"/edit")
+	}
+
+	// folder -> 无链接 (打不开)
+	_, folder, err := createReportTool(rwCtx, nil, createReportIn{Name: "f1", Type: "folder"})
+	if err != nil {
+		t.Fatalf("create folder: %v", err)
+	}
+	if folder.URL != "" {
+		t.Errorf("folder url = %q, want empty", folder.URL)
+	}
+
+	// 站点地址未配置 -> 无链接
+	conf.Get().Site.URL = ""
+	_, got2, _ := getReportTool(rwCtx, nil, getReportIn{ID: created.ID})
+	if got2.URL != "" || got2.EditURL != "" {
+		t.Errorf("no site url should yield empty links, got url=%q edit=%q", got2.URL, got2.EditURL)
 	}
 }
 

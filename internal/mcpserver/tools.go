@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"strings"
 
+	"xproxy/conf"
 	"xproxy/dao"
 	"xproxy/docs"
 	"xproxy/internal/auth"
@@ -42,6 +43,7 @@ type reportBrief struct {
 	Type     string `json:"type" jsonschema:"report 或 folder"`
 	ParentID int    `json:"parent_id"`
 	DSN      string `json:"dsn"`
+	URL      string `json:"url,omitempty" jsonschema:"报表查看链接 (可直接打开); 站点地址未配置或 folder 时为空"`
 }
 
 type getReportIn struct {
@@ -58,6 +60,8 @@ type getReportOut struct {
 	Content    string `json:"content" jsonschema:"已发布版模板 (查看者所见)"`
 	Settings   string `json:"settings"`
 	IsPublic   bool   `json:"is_public"`
+	URL        string `json:"url,omitempty" jsonschema:"报表查看链接 (控制台, 可直接打开); 站点地址未配置或 folder 时为空"`
+	EditURL    string `json:"edit_url,omitempty" jsonschema:"报表编辑链接 (控制台); 站点地址未配置或 folder 时为空"`
 }
 
 type listDatasourcesOut struct {
@@ -128,7 +132,8 @@ type createReportIn struct {
 }
 
 type idOut struct {
-	ID int `json:"id"`
+	ID  int    `json:"id"`
+	URL string `json:"url,omitempty" jsonschema:"新建报表的控制台查看链接 (folder 或站点地址未配置时为空)"`
 }
 
 type updateReportIn struct {
@@ -227,6 +232,7 @@ func listReportsTool(ctx context.Context, _ *mcp.CallToolRequest, _ emptyIn) (*m
 		if pr.perm.ReportReadable(r.Id, parents, "r") {
 			out.Reports = append(out.Reports, reportBrief{
 				ID: r.Id, Name: r.Name, Type: r.Type, ParentID: r.ParentID, DSN: r.DSN,
+				URL: reportURL(r),
 			})
 		}
 	}
@@ -252,6 +258,7 @@ func getReportTool(ctx context.Context, _ *mcp.CallToolRequest, in getReportIn) 
 	return nil, getReportOut{
 		ID: r.Id, Name: r.Name, Type: r.Type, ParentID: r.ParentID, DSN: r.DSN,
 		DevContent: r.DevContent, Content: r.Content, Settings: r.Settings, IsPublic: r.IsPublic,
+		URL: reportURL(r), EditURL: reportEditURL(r),
 	}, nil
 }
 
@@ -384,7 +391,7 @@ func createReportTool(ctx context.Context, _ *mcp.CallToolRequest, in createRepo
 	if err != nil {
 		return nil, idOut{}, err
 	}
-	return nil, idOut{ID: int(id)}, nil
+	return nil, idOut{ID: int(id), URL: reportURL(&dao.ReportRecord{Id: int(id), Type: typ})}, nil
 }
 
 func updateReportTool(ctx context.Context, _ *mcp.CallToolRequest, in updateReportIn) (*mcp.CallToolResult, okOut, error) {
@@ -433,6 +440,25 @@ func publishReportTool(ctx context.Context, _ *mcp.CallToolRequest, in publishIn
 		_ = dao.AddReportVersion(in.ID, r.Content, pr.user.Id, pr.user.Nick)
 	}
 	return nil, okOut{OK: true}, nil
+}
+
+// reportURL 构造报表在控制台的查看链接, 方便在 AI 工具里直接点开。
+// MCP 调用者是已登录的开发者 (有后台权限), 故统一指向控制台查看页 (index.html#/reports/<id>),
+// 而非公开分享页。folder 或站点地址未配置时返回空。
+func reportURL(r *dao.ReportRecord) string {
+	base := conf.Get().SiteBaseURL()
+	if base == "" || r.Type == "folder" {
+		return ""
+	}
+	return fmt.Sprintf("%s/index.html#/reports/%d", base, r.Id)
+}
+
+// reportEditURL 构造报表的控制台编辑链接 (AI 改完模板可直接点开继续编辑/预览)。
+func reportEditURL(r *dao.ReportRecord) string {
+	if u := reportURL(r); u != "" {
+		return u + "/edit"
+	}
+	return ""
 }
 
 // requireDsnReadByName 校验调用者对某数据源 (按名) 有读权限 (dsn.<id> 或全局 dsn)。
