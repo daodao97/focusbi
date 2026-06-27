@@ -36,34 +36,47 @@ var (
 //
 // 标记段之间 (及之前/之后) 的普通文本仍按 `;` (行尾) 切分。原文顺序保持。
 func splitBlocks(content string) []string {
-	starts := markerStartRe.FindAllStringIndex(content, -1)
-	if len(starts) == 0 {
+	ranges := markerRanges(content)
+	if len(ranges) == 0 {
 		return splitBySemicolon(content)
 	}
 
 	var blocks []string
 	last := 0
-	for i, s := range starts {
-		// 标记段之前的普通文本, 按分号切
-		blocks = append(blocks, splitBySemicolon(content[last:s[0]])...)
+	for _, r := range ranges {
+		// 标记段之前的普通文本, 按分号切; 标记段整段抠出, 不切。
+		blocks = append(blocks, splitBySemicolon(content[last:r[0]])...)
+		blocks = append(blocks, content[r[0]:r[1]])
+		last = r[1]
+	}
+	// 尾部剩余普通文本
+	blocks = append(blocks, splitBySemicolon(content[last:])...)
+	return blocks
+}
 
-		// 确定本标记段的结束位置 end:
-		// 下一个标记段的起点 (无则文末) 作为搜索上界。
+// markerRanges 返回所有标记段 (#!SCRIPT/#!MARKDOWN/#!RAW ... #!END) 在 content 中的
+// 字节区间 [start,end)。每段从其 #!XXX 起, 到最近的: 行首 #!END (含); 或下一个标记段
+// 起始 (不含, 无 #!END 的退化); 或文末。
+// 既供 splitBlocks 切块, 也供 parseFilters 跳过区块内部 —— 脚本里的 JS template literal
+// `${x}` 不应被当成报表过滤器解析。两处共用此函数, 避免边界判定漂移。
+func markerRanges(content string) [][2]int {
+	starts := markerStartRe.FindAllStringIndex(content, -1)
+	if len(starts) == 0 {
+		return nil
+	}
+	ranges := make([][2]int, 0, len(starts))
+	for i, s := range starts {
 		upper := len(content)
 		if i+1 < len(starts) {
 			upper = starts[i+1][0]
 		}
 		end := upper
-		// 在 [标记内容起点, upper) 里找行首 #!END; 找到则含它 (整段收尾)。
 		if loc := markerEndRe.FindStringIndex(content[s[1]:upper]); loc != nil {
 			end = s[1] + loc[1]
 		}
-		blocks = append(blocks, content[s[0]:end])
-		last = end
+		ranges = append(ranges, [2]int{s[0], end})
 	}
-	// 尾部剩余普通文本
-	blocks = append(blocks, splitBySemicolon(content[last:])...)
-	return blocks
+	return ranges
 }
 
 // splitBySemicolon 以分号结尾的行作为区块边界切分 (SQL/markdown 用)。空白片段被丢弃。

@@ -25,6 +25,28 @@ func TestParseFilters(t *testing.T) {
 	}
 }
 
+// #!SCRIPT 内的 JS template literal ${x} 不应被当成报表过滤器解析或删除。
+func TestParseFiltersSkipsScriptBody(t *testing.T) {
+	content := "${month|统计月份|today|date}\n" +
+		"#!SCRIPT\n" +
+		"const table = 'user_api_call_record';\n" +
+		"const sql = `SELECT * FROM ${table} LIMIT 1`;\n" +
+		"#!END\n"
+	filters, cleaned := parseFilters(content)
+	if len(filters) != 1 || filters[0].Name != "month" {
+		t.Fatalf("want only the month filter, got %+v", filters)
+	}
+	for _, f := range filters {
+		if f.Name == "table" {
+			t.Fatalf("JS template literal ${table} leaked into filters")
+		}
+	}
+	// 脚本体内的 ${table} 必须原样保留, 不能被删除。
+	if !strings.Contains(cleaned, "${table}") {
+		t.Errorf("script body ${table} was stripped: %q", cleaned)
+	}
+}
+
 func TestMacroValuesDateRange(t *testing.T) {
 	filters := []FilterDef{{Name: "date", Type: "date_range", Default: "-7 days,today"}}
 	m := macroValues(filters, map[string]string{})

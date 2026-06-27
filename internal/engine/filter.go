@@ -25,9 +25,29 @@ func parseFilters(content string) ([]FilterDef, string) {
 	var filters []FilterDef
 	seen := map[string]bool{}
 
-	matches := filterRe.FindAllStringSubmatch(content, -1)
-	for _, m := range matches {
-		body := strings.TrimSpace(m[1])
+	// 标记段 (#!SCRIPT/#!MARKDOWN/#!RAW) 内部不解析过滤器: 脚本里的 JS template literal
+	// `${table}` 不是报表过滤器, 不能被提取或删除。只扫描标记段之外的内容。
+	skip := markerRanges(content)
+	inSkip := func(pos int) bool {
+		for _, r := range skip {
+			if pos >= r[0] && pos < r[1] {
+				return true
+			}
+		}
+		return false
+	}
+
+	// 一次性扫描: 标记段外的 ${...} 既提取为过滤器, 又从 cleaned 中删除; 标记段内原样保留。
+	var b strings.Builder
+	prev := 0
+	for _, loc := range filterRe.FindAllStringSubmatchIndex(content, -1) {
+		if inSkip(loc[0]) {
+			continue // 标记段内: 不提取也不删除
+		}
+		b.WriteString(content[prev:loc[0]]) // 保留占位前文本, 跳过 ${...} 本身
+		prev = loc[1]
+
+		body := strings.TrimSpace(content[loc[2]:loc[3]])
 		if body == "" {
 			continue
 		}
@@ -38,10 +58,9 @@ func parseFilters(content string) ([]FilterDef, string) {
 		seen[f.Name] = true
 		filters = append(filters, f)
 	}
+	b.WriteString(content[prev:])
 
-	// 移除定义行: 把 ${...} 占位整体删掉 (含可能跟随的 ; 与换行)
-	cleaned := filterRe.ReplaceAllString(content, "")
-	cleaned = regexp.MustCompile(`(?m)^\s*;\s*$`).ReplaceAllString(cleaned, "")
+	cleaned := regexp.MustCompile(`(?m)^\s*;\s*$`).ReplaceAllString(b.String(), "")
 	return filters, cleaned
 }
 
