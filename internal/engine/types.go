@@ -54,8 +54,9 @@ type Block struct {
 	Markdown  string              `json:"markdown,omitempty"`
 	SQL       string              `json:"sql,omitempty"`
 	// Messages 波动检测等产出的告警消息 (移植自 dataddy report['message']); 供订阅推送读取。
-	Messages []string `json:"messages,omitempty"`
-	Error    string   `json:"error,omitempty"`
+	Messages []string     `json:"messages,omitempty"`
+	Error    string       `json:"error,omitempty"`
+	Timing   *BlockTiming `json:"timing,omitempty"`
 }
 
 // CellAttr 是一个单元格标签, 交给前端 el-tag 渲染。
@@ -78,7 +79,28 @@ type Result struct {
 	// Messages 汇总各区块的波动/告警消息 (按区块顺序); 供订阅推送直接读取。
 	Messages []string `json:"messages,omitempty"`
 	// PrependContent 页面顶部注入的原始 HTML (来自 report.settings); 前端 v-html 渲染。
-	PrependContent string `json:"prepend_content,omitempty"`
+	PrependContent string        `json:"prepend_content,omitempty"`
+	Timing         *ReportTiming `json:"timing,omitempty"`
+}
+
+// BlockTiming 是单个输出区块的执行计时信息, 供接口与前端调试展示。
+type BlockTiming struct {
+	ParseMS        int64  `json:"parse_ms"`
+	ExecMS         int64  `json:"exec_ms"`
+	TotalMS        int64  `json:"total_ms"`
+	DSN            string `json:"dsn,omitempty"`
+	Rows           int    `json:"rows,omitempty"`
+	Columns        int    `json:"columns,omitempty"`
+	SQLLen         int    `json:"sql_len,omitempty"`
+	ProducedBlocks int    `json:"produced_blocks,omitempty"`
+	Error          string `json:"error,omitempty"`
+}
+
+// ReportTiming 是整份报表的执行计时信息。
+type ReportTiming struct {
+	TotalMS      int64 `json:"total_ms"`
+	ParsedBlocks int   `json:"parsed_blocks"`
+	OutputBlocks int   `json:"output_blocks"`
 }
 
 // ChartConfig 是规整后的图表配置, 交给前端 ECharts 渲染。

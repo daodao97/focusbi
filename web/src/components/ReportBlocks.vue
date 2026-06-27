@@ -3,6 +3,7 @@ import { ref, defineAsyncComponent } from 'vue'
 import { ElMessage } from 'element-plus'
 import { InfoFilled } from '@element-plus/icons-vue'
 import { copyText } from '@/clipboard'
+import TimingTooltip from './TimingTooltip.vue'
 // ChartBlock(ECharts ~1MB) 与 SqlEditor(Monaco ~3MB) 体积大且仅按需出现,
 // 用异步组件拆分成独立 chunk: 无图表/不看 SQL 的页面不会加载它们。
 const ChartBlock = defineAsyncComponent(() => import('./ChartBlock.vue'))
@@ -168,6 +169,7 @@ function summaryCell(b, type, col, idx) {
   const v = data[col.name]
   return v === undefined || v === null ? '' : v
 }
+
 </script>
 
 <template>
@@ -175,6 +177,7 @@ function summaryCell(b, type, col, idx) {
     <section v-for="b in blocks" :key="b.id" class="block">
       <div class="block-header">
         <span class="block-title">{{ b.title || b.id }}</span>
+        <TimingTooltip :timing="b.timing" />
         <span v-if="b.subtitle" class="block-subtitle">{{ b.subtitle }}</span>
         <span class="spacer" />
         <el-button v-if="b.type === 'table' && b.rows && b.rows.length" link type="primary" size="small"

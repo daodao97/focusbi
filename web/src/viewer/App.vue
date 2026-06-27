@@ -7,6 +7,7 @@ import { paramsToQuery, queryToParams, sameQuery } from '@/params'
 import { useAutoRefresh } from '@/autorefresh'
 import ReportFilters from '@/components/ReportFilters.vue'
 import ReportBlocks from '@/components/ReportBlocks.vue'
+import TimingTooltip from '@/components/TimingTooltip.vue'
 
 // 独立报表查看页 (公开分享, 类似 dataddy /open), 无需登录。
 // 形如 view.html#<share_token>?from_month=2026-06-01&to_month=2026-06-30
@@ -77,7 +78,10 @@ onMounted(load)
   <div class="viewer">
     <header class="top">
       <span class="brand">FocusBI</span>
-      <h1 v-if="report.name">{{ report.name }}</h1>
+      <div v-if="report.name" class="title-wrap">
+        <h1>{{ report.name }}</h1>
+        <TimingTooltip :timing="result?.timing" scope="report" />
+      </div>
       <el-button v-if="token" :loading="loading" size="small" @click="run(true)">刷新</el-button>
       <el-button v-if="autoRefresh.enabled.value" size="small" type="warning" plain
         :icon="autoRefresh.paused.value ? VideoPlay : VideoPause" @click="autoRefresh.toggle()">
@@ -101,7 +105,8 @@ onMounted(load)
 .viewer { min-height: 100vh; background: var(--el-bg-color-page); }
 .top { display: flex; align-items: center; gap: 16px; padding: 14px 24px; background: var(--el-bg-color); border-bottom: 1px solid var(--el-border-color-light); }
 .brand { font-weight: 600; color: var(--el-text-color-primary); }
-.top h1 { font-size: 16px; margin: 0; flex: 1; color: var(--el-text-color-primary); }
+.title-wrap { display: inline-flex; align-items: center; gap: 6px; flex: 1; min-width: 0; }
+.top h1 { font-size: 16px; margin: 0; color: var(--el-text-color-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .content { max-width: 1200px; margin: 0 auto; padding: 20px; }
 .sheet { background: var(--el-bg-color); border-radius: 8px; padding: 24px; }
 .prepend { margin-bottom: 16px; }

@@ -4,11 +4,33 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"xproxy/conf"
 
 	"github.com/spf13/cast"
 )
+
+// RunTraceEvent 是 Runner 执行过程中的可选观测事件。
+type RunTraceEvent struct {
+	Phase          string
+	BlockIndex     int
+	BlockKind      string
+	BlockID        string
+	BlockTitle     string
+	DSN            string
+	Duration       time.Duration
+	ParsedBlocks   int
+	OutputBlocks   int
+	Rows           int
+	Columns        int
+	SQLLen         int
+	ProducedBlocks int
+	Error          string
+}
+
+// RunTraceFunc 接收 Runner 执行过程中的计时事件。调用方应保证它可并发调用。
+type RunTraceFunc func(RunTraceEvent)
 
 // Runner 执行报表模板。defaultDSN 为报表配置的默认数据源。
 type Runner struct {
@@ -19,6 +41,7 @@ type Runner struct {
 	authz func(dsn string) error
 	// concurrency 独立 SQL 区块的并发预取数。<=0 时 Run 取 conf 默认值。
 	concurrency int
+	trace       RunTraceFunc
 }
 
 func NewRunner(defaultDSN string) *Runner {
@@ -51,6 +74,13 @@ func (r *Runner) WithConcurrency(n int) *Runner {
 	return &cp
 }
 
+// WithTrace 返回一个带执行计时回调的 Runner 副本。
+func (r *Runner) WithTrace(fn RunTraceFunc) *Runner {
+	cp := *r
+	cp.trace = fn
+	return &cp
+}
+
 // Parse 仅解析过滤器, 不执行 SQL —— 用于前端首次渲染输入控件。
 func Parse(content string) []FilterDef {
 	filters, _ := parseFilters(content)
@@ -59,7 +89,30 @@ func Parse(content string) []FilterDef {
 }
 
 // Run 解析并执行报表, params 为用户提交的过滤器取值。
-func (r *Runner) Run(content string, params map[string]string) (*Result, error) {
+func (r *Runner) Run(content string, params map[string]string) (ret *Result, err error) {
+	runStarted := time.Now()
+	parsedCount := 0
+	parseDurations := map[int]time.Duration{}
+	defer func() {
+		if r.trace != nil {
+			ev := RunTraceEvent{Phase: "report", Duration: time.Since(runStarted), ParsedBlocks: parsedCount}
+			if ret != nil {
+				ev.OutputBlocks = len(ret.Blocks)
+			}
+			if err != nil {
+				ev.Error = err.Error()
+			}
+			r.trace(ev)
+		}
+		if ret != nil {
+			ret.Timing = &ReportTiming{
+				TotalMS:      durationMS(time.Since(runStarted)),
+				ParsedBlocks: parsedCount,
+				OutputBlocks: len(ret.Blocks),
+			}
+		}
+	}()
+
 	filters, cleaned := parseFilters(content)
 	resolveDefaults(filters)
 	r.resolveFilterOptions(filters) // enum_sql: 查库填充动态选项
@@ -73,8 +126,23 @@ func (r *Runner) Run(content string, params map[string]string) (*Result, error) 
 		if strings.TrimSpace(rawText) == "" {
 			continue
 		}
-		parsed = append(parsed, parseBlock(rawText))
+		idx := len(parsed) + 1
+		started := time.Now()
+		rb := parseBlock(rawText)
+		parseDuration := time.Since(started)
+		parseDurations[idx-1] = parseDuration
+		r.traceEvent(RunTraceEvent{
+			Phase:      "block_parse",
+			BlockIndex: idx,
+			BlockKind:  rb.kind,
+			BlockID:    annotationString(rb, "id"),
+			BlockTitle: annotationString(rb, "title"),
+			Duration:   parseDuration,
+			SQLLen:     len(rb.body),
+		})
+		parsed = append(parsed, rb)
 	}
+	parsedCount = len(parsed)
 
 	// 阶段 1: 并发预取所有独立 SQL 区块的数据 (查询 + 数据管线)。
 	// 纯 SQL 块的 runSQLData 是自包含的, 无跨块依赖, 故可并行; 脚本/markdown 不预取。
@@ -111,11 +179,32 @@ func (r *Runner) Run(content string, params map[string]string) (*Result, error) 
 		// 脚本可产出多个区块, 与单 block 模型不同, 单独处理。
 		if rb.kind == "script" {
 			flush()
+			started := time.Now()
 			ctx := scriptContext{defaultDSN: r.defaultDSN, params: params, authz: r.authz, blocks: blockRefs, noCache: r.noCache}
-			scriptBlocks, scriptFilters, _ := runScript(stripMarker(rb.body), ctx)
+			scriptBlocks, scriptFilters, scriptErr := runScript(stripMarker(rb.body), ctx)
+			errStr := ""
+			if scriptErr != nil {
+				errStr = scriptErr.Error()
+			}
+			timing := blockTiming(parseDurations[i], time.Since(started))
+			timing.DSN = r.defaultDSN
+			timing.ProducedBlocks = len(scriptBlocks)
+			timing.Error = errStr
+			r.traceEvent(RunTraceEvent{
+				Phase:          "block_exec",
+				BlockIndex:     i + 1,
+				BlockKind:      rb.kind,
+				BlockID:        annotationString(rb, "id"),
+				BlockTitle:     annotationString(rb, "title"),
+				DSN:            r.defaultDSN,
+				Duration:       time.Since(started),
+				ProducedBlocks: len(scriptBlocks),
+				Error:          errStr,
+			})
 			// 脚本产出的过滤器并入结果 (供前端渲染下拉)
 			result.Filters = append(result.Filters, scriptFilters...)
 			for _, sb := range scriptBlocks {
+				sb.Timing = cloneTiming(timing)
 				appendBlock(sb)
 			}
 			continue
@@ -123,6 +212,7 @@ func (r *Runner) Run(content string, params map[string]string) (*Result, error) 
 
 		switch rb.kind {
 		case "markdown", "raw":
+			started := time.Now()
 			// 行级条件宏: 整块跳过判断 (块首 `-- {?cond}` 经 applyMacros 处理)
 			if strings.TrimSpace(applyMacros(rb.body, macros)) == "" {
 				continue
@@ -131,21 +221,36 @@ func (r *Runner) Run(content string, params map[string]string) (*Result, error) 
 			block := Block{ID: annotationString(rb, "id"), Title: annotationString(rb, "title"), Type: rb.kind}
 			block.Hidden = annotationBool(rb, "hidden")
 			block.Markdown = applyMacros(stripMarker(rb.body), macros)
+			block.Timing = blockTiming(parseDurations[i], time.Since(started))
 			appendBlock(block)
+			r.traceEvent(RunTraceEvent{
+				Phase:      "block_exec",
+				BlockIndex: i + 1,
+				BlockKind:  rb.kind,
+				BlockID:    annotationString(rb, "id"),
+				BlockTitle: annotationString(rb, "title"),
+				Duration:   time.Since(started),
+			})
 		case "sql":
 			sd := prefetched[i]
 			if sd == nil {
 				continue // 空 body (行级条件宏删空) -> 跳过, 与串行一致
 			}
 			spec, isMerge := parseJoinConfig(rb.annotations)
+			timing := cloneTiming(sd.timing)
+			if timing == nil {
+				timing = &BlockTiming{}
+			}
+			timing.ParseMS += durationMS(parseDurations[i])
+			timing.TotalMS = timing.ParseMS + timing.ExecMS
 			// 带 @join/@union 且已有挂起基底 -> 并入基底, 不新开块。
 			if isMerge && pending != nil {
-				pending.merge(spec, sd.cols, sd.rows, sd.errStr)
+				pending.merge(spec, sd.cols, sd.rows, sd.errStr, timing)
 				continue
 			}
 			// 否则定稿上一个基底, 自己成为新的挂起基底。
 			flush()
-			pending = newMergeGroup(rb, sd.cols, sd.rows, sd.flipped, sd.sql, sd.errStr)
+			pending = newMergeGroup(rb, sd.cols, sd.rows, sd.flipped, sd.sql, sd.errStr, timing)
 		default:
 			continue
 		}
@@ -155,6 +260,64 @@ func (r *Runner) Run(content string, params map[string]string) (*Result, error) 
 	return result, nil
 }
 
+func (r *Runner) traceEvent(ev RunTraceEvent) {
+	if r.trace != nil {
+		r.trace(ev)
+	}
+}
+
+func (r *Runner) blockDSN(rb *rawBlock) string {
+	dsn := r.defaultDSN
+	if d := annotationString(rb, "dsn"); d != "" {
+		dsn = d
+	}
+	return dsn
+}
+
+func durationMS(d time.Duration) int64 {
+	return d.Milliseconds()
+}
+
+func blockTiming(parseDuration, execDuration time.Duration) *BlockTiming {
+	parseMS := durationMS(parseDuration)
+	execMS := durationMS(execDuration)
+	return &BlockTiming{ParseMS: parseMS, ExecMS: execMS, TotalMS: parseMS + execMS}
+}
+
+func cloneTiming(t *BlockTiming) *BlockTiming {
+	if t == nil {
+		return nil
+	}
+	cp := *t
+	return &cp
+}
+
+func mergeTiming(base, add *BlockTiming) *BlockTiming {
+	if base == nil {
+		return cloneTiming(add)
+	}
+	if add == nil {
+		return base
+	}
+	base.ParseMS += add.ParseMS
+	base.ExecMS += add.ExecMS
+	base.TotalMS = base.ParseMS + base.ExecMS
+	base.Rows += add.Rows
+	if add.Columns > base.Columns {
+		base.Columns = add.Columns
+	}
+	base.SQLLen += add.SQLLen
+	if base.DSN == "" {
+		base.DSN = add.DSN
+	} else if add.DSN != "" && base.DSN != add.DSN {
+		base.DSN += "," + add.DSN
+	}
+	if base.Error == "" {
+		base.Error = add.Error
+	}
+	return base
+}
+
 // sqlData 是一个 SQL 区块预取阶段的产出 (runSQLData 的返回值打包)。
 type sqlData struct {
 	cols    []string
@@ -162,6 +325,7 @@ type sqlData struct {
 	flipped bool
 	sql     string
 	errStr  string
+	timing  *BlockTiming
 }
 
 // prefetchSQL 并发执行所有独立 SQL 区块的数据阶段, 返回与 parsed 等长的结果切片
@@ -200,13 +364,50 @@ func (r *Runner) prefetchSQL(parsed []*rawBlock, macros map[string]string) []*sq
 
 	run := func(j job) {
 		// 兜底: runSQLData 只返回 in-band errStr, 但并发下意外 panic 不应拖垮整个报表。
+		started := time.Now()
+		dsn := r.blockDSN(j.rb)
 		defer func() {
 			if rec := recover(); rec != nil {
-				out[j.idx] = &sqlData{sql: j.body, errStr: fmt.Sprintf("区块执行异常: %v", rec)}
+				errStr := fmt.Sprintf("区块执行异常: %v", rec)
+				timing := blockTiming(0, time.Since(started))
+				timing.DSN = dsn
+				timing.SQLLen = len(j.body)
+				timing.Error = errStr
+				out[j.idx] = &sqlData{sql: j.body, errStr: errStr, timing: timing}
+				r.traceEvent(RunTraceEvent{
+					Phase:      "block_exec",
+					BlockIndex: j.idx + 1,
+					BlockKind:  j.rb.kind,
+					BlockID:    annotationString(j.rb, "id"),
+					BlockTitle: annotationString(j.rb, "title"),
+					DSN:        dsn,
+					Duration:   time.Since(started),
+					SQLLen:     len(j.body),
+					Error:      errStr,
+				})
 			}
 		}()
 		cols, rows, flipped, sql, errStr := r.runSQLData(j.rb, j.body)
-		out[j.idx] = &sqlData{cols: cols, rows: rows, flipped: flipped, sql: sql, errStr: errStr}
+		timing := blockTiming(0, time.Since(started))
+		timing.DSN = dsn
+		timing.Rows = len(rows)
+		timing.Columns = len(cols)
+		timing.SQLLen = len(sql)
+		timing.Error = errStr
+		out[j.idx] = &sqlData{cols: cols, rows: rows, flipped: flipped, sql: sql, errStr: errStr, timing: timing}
+		r.traceEvent(RunTraceEvent{
+			Phase:      "block_exec",
+			BlockIndex: j.idx + 1,
+			BlockKind:  j.rb.kind,
+			BlockID:    annotationString(j.rb, "id"),
+			BlockTitle: annotationString(j.rb, "title"),
+			DSN:        dsn,
+			Duration:   time.Since(started),
+			Rows:       len(rows),
+			Columns:    len(cols),
+			SQLLen:     len(sql),
+			Error:      errStr,
+		})
 	}
 
 	if n == 1 {
@@ -303,21 +504,24 @@ type mergeGroup struct {
 	flipped bool
 	sqls    []string
 	errStr  string
+	timing  *BlockTiming
 }
 
-func newMergeGroup(rb *rawBlock, cols []string, rows []map[string]any, flipped bool, sql, errStr string) *mergeGroup {
+func newMergeGroup(rb *rawBlock, cols []string, rows []map[string]any, flipped bool, sql, errStr string, timing *BlockTiming) *mergeGroup {
 	return &mergeGroup{
 		rb:      rb,
 		table:   newArrayTable(cols, rows),
 		flipped: flipped,
 		sqls:    []string{sql},
 		errStr:  errStr,
+		timing:  cloneTiming(timing),
 	}
 }
 
 // merge 把一个带 @join/@union 的块并入基底。
-func (g *mergeGroup) merge(spec joinSpec, cols []string, rows []map[string]any, errStr string) {
+func (g *mergeGroup) merge(spec joinSpec, cols []string, rows []map[string]any, errStr string, timing *BlockTiming) {
 	g.sqls = append(g.sqls, "")
+	g.timing = mergeTiming(g.timing, timing)
 	if errStr != "" {
 		if g.errStr == "" {
 			g.errStr = errStr
@@ -343,8 +547,12 @@ func (g *mergeGroup) finalize() Block {
 		Type:  "table",
 		SQL:   strings.TrimSpace(strings.Join(g.sqls, ";\n")),
 	}
+	block.Timing = cloneTiming(g.timing)
 	if g.errStr != "" {
 		block.Error = g.errStr
+		if block.Timing != nil && block.Timing.Error == "" {
+			block.Timing.Error = g.errStr
+		}
 		return block
 	}
 

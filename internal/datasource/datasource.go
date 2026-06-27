@@ -136,14 +136,18 @@ func get(name string) (*sql.DB, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open %s datasource: %w", name, err)
 	}
-	db.SetMaxOpenConns(20)
-	db.SetMaxIdleConns(5)
 	if rec != nil && rec.SSHEnabled && driver == "mysql" {
+		// 同一条 ssh client 上的 direct-tcpip channel 数也受跳板机限制。
+		// 并发报表下让 database/sql 在本地排队, 不把连接风暴打到 SSH 层。
+		db.SetMaxOpenConns(sshMaxConcurrentDials)
+		db.SetMaxIdleConns(sshMaxConcurrentDials)
 		// ssh 隧道下的连接更易因跳板机断线而失效, 缩短存活/空闲时间,
 		// 让连接池尽快淘汰挂在已断隧道上的旧连接, 避免复用时 unexpected EOF。
 		db.SetConnMaxLifetime(5 * time.Minute)
 		db.SetConnMaxIdleTime(60 * time.Second)
 	} else {
+		db.SetMaxOpenConns(20)
+		db.SetMaxIdleConns(5)
 		db.SetConnMaxLifetime(time.Hour)
 	}
 
@@ -216,16 +220,19 @@ func Invalidate(name string) {
 }
 
 // Query 在指定数据源上执行查询, 返回保留列序的结果。
-// 若首次因连接失效 (常见于 ssh 隧道断开后复用了池中的坏连接) 而失败,
-// 会失效该数据源的连接池与隧道并自动重试一次。
+//
+// 坏连接 (ssh 隧道断开后池中残留的失效连接) 不在此处主动失效整个连接池:
+//   - database/sql 自身会淘汰坏连接 —— 驱动在「确定未执行、可安全重试」时返回
+//     driver.ErrBadConn, 库据此自动换连接重试; 连接中途断时返回 ErrInvalidConn,
+//     库也会把该连接移出池, 下次取到的是新连接。
+//   - 隧道侧自愈: 新连接经 registerTunnelDialer 拨号, 若 ssh client 失效会自动
+//     reconnectTunnel 重建 (见 ssh.go)。
+//
+// 早期版本在这里 isBadConnErr -> Invalidate(name) -> 重试, 会关闭【多个并发查询
+// 共用】的整个 *sql.DB 池与隧道, 把正在用该池的其它并发查询连带打断 (unexpected
+// EOF), 并触发 Invalidate 正反馈雪崩。并发预取上线后暴露, 故移除。
 func Query(name, query string, args ...any) (*QueryResult, error) {
-	res, err := queryOnce(name, query, args...)
-	if err != nil && isBadConnErr(err) {
-		// 坏连接: 关闭连接池与隧道, 下次 get 会重建连接 (隧道侧也会自动重连)。
-		Invalidate(name)
-		return queryOnce(name, query, args...)
-	}
-	return res, err
+	return queryOnce(name, query, args...)
 }
 
 // queryOnce 执行一次查询。

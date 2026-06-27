@@ -72,11 +72,16 @@ result.table({ id: 'from_script', title: '脚本复用',
 // 把结果序列化为稳定 JSON, 便于逐字节比较 (块序/消息序/内容全覆盖)。
 func resultJSON(t *testing.T, r *Result) string {
 	t.Helper()
+	blocks := make([]Block, len(r.Blocks))
+	copy(blocks, r.Blocks)
+	for i := range blocks {
+		blocks[i].Timing = nil
+	}
 	b, err := json.Marshal(struct {
 		Blocks   []Block  `json:"blocks"`
 		Messages []string `json:"messages"`
 		Filters  []FilterDef
-	}{r.Blocks, r.Messages, r.Filters})
+	}{blocks, r.Messages, r.Filters})
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
@@ -103,6 +108,12 @@ func TestRunConcurrencyEquivalence(t *testing.T) {
 	// 顺序敏感性 sanity: 第一个块应是 markdown 概览, 脚本块在最后。
 	if len(serial.Blocks) == 0 || serial.Blocks[0].Type != "markdown" {
 		t.Fatalf("首块应为 markdown, got %+v", serial.Blocks)
+	}
+	if serial.Timing == nil || serial.Timing.ParsedBlocks == 0 {
+		t.Fatalf("应返回报表计时信息, got %+v", serial.Timing)
+	}
+	if serial.Blocks[0].Timing == nil {
+		t.Fatalf("应返回区块计时信息")
 	}
 	last := serial.Blocks[len(serial.Blocks)-1]
 	if last.ID != "from_script" {

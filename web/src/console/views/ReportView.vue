@@ -10,6 +10,7 @@ import { paramsToQuery, queryToParams, sameQuery } from '@/params'
 import { useAutoRefresh } from '@/autorefresh'
 import ReportFilters from '@/components/ReportFilters.vue'
 import ReportBlocks from '@/components/ReportBlocks.vue'
+import TimingTooltip from '@/components/TimingTooltip.vue'
 
 const canManage = computed(() => canManageReports())
 
@@ -106,7 +107,10 @@ onMounted(load)
 <template>
   <div>
     <div class="toolbar">
-      <h2 class="title">{{ report.name }}</h2>
+      <div class="title-wrap">
+        <h2 class="title">{{ report.name }}</h2>
+        <TimingTooltip :timing="result?.timing" scope="report" />
+      </div>
       <div class="actions">
         <el-button :loading="loading" @click="run(true)">刷新</el-button>
         <el-button v-if="autoRefresh.enabled.value" type="warning" plain
@@ -151,6 +155,7 @@ onMounted(load)
 
 <style scoped>
 .toolbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+.title-wrap { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
 .title { margin: 0; font-size: 18px; }
 .actions { display: flex; gap: 8px; }
 .sheet { background: var(--el-bg-color); border-radius: 8px; padding: 24px; min-height: 200px; }

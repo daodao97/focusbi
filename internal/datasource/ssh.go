@@ -12,6 +12,7 @@ import (
 
 	mysqldriver "github.com/go-sql-driver/mysql"
 	"golang.org/x/crypto/ssh"
+	"golang.org/x/sync/singleflight"
 )
 
 // sshTunnel 持有一个到跳板机的 ssh 连接, 数据库连接经它转发。
@@ -21,11 +22,20 @@ type sshTunnel struct {
 	netName   string         // 注册到 mysql 驱动的自定义网络名
 	rec       *dao.DsnRecord // 保留配置, 供断线后自动重连
 	stop      chan struct{}  // 关闭以停止 keepalive
+	dialSem   chan struct{}  // 限制单 client 上并发开转发通道数 (见 sshMaxConcurrentDials)
 }
 
+// sshMaxConcurrentDials 限制同一个 ssh client 上"同时开转发通道"的并发数。
+// 引擎并发查询时, mysql 连接池会瞬间在同一隧道上开多个 direct-tcpip 通道,
+// 突发请求可能被跳板机 sshd (MaxSessions/MaxStartups) 判定为异常而断开整条连接,
+// 表现为 "unexpected packet in response to channel open: <nil>"。
+// 这里把"开通道"动作限流; 通道建立后即释放, 不影响已建立连接的并发查询。
+const sshMaxConcurrentDials = 2
+
 var (
-	tunMu   sync.Mutex
-	tunnels = map[string]*sshTunnel{}
+	tunMu        sync.Mutex
+	tunnels      = map[string]*sshTunnel{}
+	tunnelBuilds singleflight.Group
 )
 
 // sshSignature 由所有影响连接的字段拼成, 用于判断隧道是否需要重建。
@@ -108,32 +118,67 @@ func keepAlive(client *ssh.Client, stop <-chan struct{}) {
 func ensureTunnel(name string, r *dao.DsnRecord) (string, error) {
 	sig := sshSignature(r)
 
+	if netName, ok := currentTunnelNetName(name, sig); ok {
+		return netName, nil
+	}
+
+	for {
+		v, err, _ := tunnelBuilds.Do(name, func() (any, error) {
+			if netName, ok := currentTunnelNetName(name, sig); ok {
+				return netName, nil
+			}
+
+			// 配置变化或首次建立: 先拨号 (不持锁, 避免阻塞其它数据源), 再入表。
+			client, err := dialSSH(r)
+			if err != nil {
+				return "", err
+			}
+
+			netName := "ssh+" + name
+			recCopy := *r
+			t := &sshTunnel{
+				client:    client,
+				signature: sig,
+				netName:   netName,
+				rec:       &recCopy,
+				stop:      make(chan struct{}),
+				dialSem:   make(chan struct{}, sshMaxConcurrentDials),
+			}
+
+			tunMu.Lock()
+			if old, ok := tunnels[name]; ok {
+				if old.signature == sig {
+					tunMu.Unlock()
+					t.closeLocked()
+					return old.netName, nil
+				}
+				old.closeLocked()
+				delete(tunnels, name)
+			}
+			tunnels[name] = t
+			tunMu.Unlock()
+
+			go keepAlive(client, t.stop)
+			registerTunnelDialer(name, netName)
+			return netName, nil
+		})
+		if err != nil {
+			return "", err
+		}
+		netName := v.(string)
+		if cur, ok := currentTunnelNetName(name, sig); ok && cur == netName {
+			return netName, nil
+		}
+	}
+}
+
+func currentTunnelNetName(name, sig string) (string, bool) {
 	tunMu.Lock()
+	defer tunMu.Unlock()
 	if t, ok := tunnels[name]; ok && t.signature == sig {
-		tunMu.Unlock()
-		return t.netName, nil
+		return t.netName, true
 	}
-	tunMu.Unlock()
-
-	// 配置变化或首次建立: 先拨号 (不持锁, 避免阻塞其它数据源), 再入表。
-	client, err := dialSSH(r)
-	if err != nil {
-		return "", err
-	}
-
-	netName := "ssh+" + name
-	tunMu.Lock()
-	if old, ok := tunnels[name]; ok {
-		old.closeLocked()
-		delete(tunnels, name)
-	}
-	t := &sshTunnel{client: client, signature: sig, netName: netName, rec: r, stop: make(chan struct{})}
-	tunnels[name] = t
-	tunMu.Unlock()
-
-	go keepAlive(client, t.stop)
-	registerTunnelDialer(name, netName)
-	return netName, nil
+	return "", false
 }
 
 // registeredDialers 记录已注册过 DialContext 的网络名, 避免重复注册。
@@ -145,8 +190,8 @@ func registerTunnelDialer(name, netName string) {
 	if _, loaded := registeredDialers.LoadOrStore(netName, true); loaded {
 		return
 	}
-	mysqldriver.RegisterDialContext(netName, func(_ context.Context, addr string) (net.Conn, error) {
-		conn, err := dialViaTunnel(name, addr)
+	mysqldriver.RegisterDialContext(netName, func(ctx context.Context, addr string) (net.Conn, error) {
+		conn, err := dialViaTunnelContext(ctx, name, addr)
 		if err == nil {
 			return conn, nil
 		}
@@ -154,17 +199,31 @@ func registerTunnelDialer(name, netName string) {
 		if _, rerr := reconnectTunnel(name); rerr != nil {
 			return nil, fmt.Errorf("ssh 隧道重连失败: %w (原始错误: %v)", rerr, err)
 		}
-		return dialViaTunnel(name, addr)
+		return dialViaTunnelContext(ctx, name, addr)
 	})
 }
 
 // dialViaTunnel 经当前 ssh client 转发到目标 addr。
 func dialViaTunnel(name, addr string) (net.Conn, error) {
+	return dialViaTunnelContext(context.Background(), name, addr)
+}
+
+func dialViaTunnelContext(ctx context.Context, name, addr string) (net.Conn, error) {
 	tunMu.Lock()
 	t := tunnels[name]
 	tunMu.Unlock()
 	if t == nil {
 		return nil, fmt.Errorf("ssh 隧道 %s 未就绪", name)
+	}
+	// 限流"开转发通道": 仅在 client.Dial 期间占用信号量, 通道建好即释放。
+	// 避免引擎并发查询时突发开多个通道把跳板机连接打断。
+	if t.dialSem != nil {
+		select {
+		case t.dialSem <- struct{}{}:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+		defer func() { <-t.dialSem }()
 	}
 	conn, err := t.client.Dial("tcp", addr)
 	if err != nil {
@@ -199,7 +258,8 @@ func reconnectTunnel(name string) (*sshTunnel, error) {
 	if old != nil {
 		old.closeLocked()
 	}
-	t := &sshTunnel{client: client, signature: old.signature, netName: old.netName, rec: old.rec, stop: make(chan struct{})}
+	recCopy := *old.rec
+	t := &sshTunnel{client: client, signature: old.signature, netName: old.netName, rec: &recCopy, stop: make(chan struct{}), dialSem: make(chan struct{}, sshMaxConcurrentDials)}
 	tunnels[name] = t
 	go keepAlive(client, t.stop)
 	return t, nil

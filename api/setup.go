@@ -13,6 +13,7 @@ import (
 	"xproxy/internal/engine"
 
 	"github.com/daodao97/xgo/xdb"
+	"github.com/daodao97/xgo/xlog"
 	"github.com/gin-gonic/gin"
 )
 
@@ -618,9 +619,11 @@ func runReport(c *gin.Context) {
 	var req runRequest
 	_ = c.ShouldBindJSON(&req)
 
+	noCache := noCacheParam(req.Params)
 	result, err := engine.NewRunner(r.DSN).
-		WithNoCache(noCacheParam(req.Params)).
+		WithNoCache(noCache).
 		WithAuthz(dsnAuthzOf(c)). // 按调用者权限校验报表触达的每个数据源
+		WithTrace(reportRunTrace(c, id, r.Name, noCache)).
 		Run(r.Content, req.Params)
 	if err != nil {
 		fail(c, http.StatusInternalServerError, err.Error())
@@ -630,6 +633,76 @@ func runReport(c *gin.Context) {
 	result.AutoRefresh = settings.AutoRefresh       // 报表级自动刷新
 	result.PrependContent = settings.PrependContent // 页面顶部 HTML
 	ok(c, result)
+}
+
+func reportRunTrace(c *gin.Context, reportID int, reportName string, noCache bool) engine.RunTraceFunc {
+	uid, nick := currentUser(c)
+	path := c.FullPath()
+	if path == "" {
+		path = c.Request.URL.Path
+	}
+	requestID := c.GetHeader("X-Request-ID")
+	return func(ev engine.RunTraceEvent) {
+		switch ev.Phase {
+		case "report":
+			xlog.Info("report run timing",
+				xlog.String("event", "report_run"),
+				xlog.String("path", path),
+				xlog.String("request_id", requestID),
+				xlog.Int("report_id", reportID),
+				xlog.String("report_name", reportName),
+				xlog.Int("user_id", uid),
+				xlog.String("user", nick),
+				xlog.Any("no_cache", noCache),
+				xlog.String("duration", ev.Duration.String()),
+				xlog.Int("duration_ms", int(ev.Duration.Milliseconds())),
+				xlog.Int("parsed_blocks", ev.ParsedBlocks),
+				xlog.Int("output_blocks", ev.OutputBlocks),
+				xlog.String("error", ev.Error),
+			)
+		case "block_parse":
+			xlog.Info("report block parse timing",
+				xlog.String("event", "report_block_parse"),
+				xlog.String("path", path),
+				xlog.String("request_id", requestID),
+				xlog.Int("report_id", reportID),
+				xlog.String("report_name", reportName),
+				xlog.Int("user_id", uid),
+				xlog.String("user", nick),
+				xlog.Any("no_cache", noCache),
+				xlog.Int("block_index", ev.BlockIndex),
+				xlog.String("block_kind", ev.BlockKind),
+				xlog.String("block_id", ev.BlockID),
+				xlog.String("block_title", ev.BlockTitle),
+				xlog.String("duration", ev.Duration.String()),
+				xlog.Int("duration_ms", int(ev.Duration.Milliseconds())),
+				xlog.Int("body_len", ev.SQLLen),
+			)
+		case "block_exec":
+			xlog.Info("report block exec timing",
+				xlog.String("event", "report_block_exec"),
+				xlog.String("path", path),
+				xlog.String("request_id", requestID),
+				xlog.Int("report_id", reportID),
+				xlog.String("report_name", reportName),
+				xlog.Int("user_id", uid),
+				xlog.String("user", nick),
+				xlog.Any("no_cache", noCache),
+				xlog.Int("block_index", ev.BlockIndex),
+				xlog.String("block_kind", ev.BlockKind),
+				xlog.String("block_id", ev.BlockID),
+				xlog.String("block_title", ev.BlockTitle),
+				xlog.String("dsn", ev.DSN),
+				xlog.String("duration", ev.Duration.String()),
+				xlog.Int("duration_ms", int(ev.Duration.Milliseconds())),
+				xlog.Int("rows", ev.Rows),
+				xlog.Int("columns", ev.Columns),
+				xlog.Int("sql_len", ev.SQLLen),
+				xlog.Int("produced_blocks", ev.ProducedBlocks),
+				xlog.String("error", ev.Error),
+			)
+		}
+	}
 }
 
 // noCacheParam 判断请求是否要求旁路查询缓存 (前端"刷新"按钮传 _nocache=1)。
