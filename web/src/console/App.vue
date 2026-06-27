@@ -1,6 +1,6 @@
 <script setup>
 import { useRoute, useRouter } from 'vue-router'
-import { ref, computed, watch, onMounted } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Fold, Expand, SwitchButton, DataAnalysis, Document, Coin, User, Setting, Bell, Key, Moon, Sunny } from '@element-plus/icons-vue'
 import { api, clearToken, getToken } from '@/api'
@@ -18,13 +18,22 @@ const route = useRoute()
 const router = useRouter()
 const reports = ref([])
 
-// 侧边栏收起状态 (记住偏好); 移动端无保存偏好时默认收起 (230px 侧栏会挤垮窄屏)。
-const asidePref = localStorage.getItem('focusbi_aside_collapsed')
-const collapsed = ref(asidePref === '1' || (asidePref === null && window.innerWidth <= 768))
+// 侧边栏收起状态 (桌面端记住偏好); 移动端不看 collapsed, 走抽屉。
+const collapsed = ref(localStorage.getItem('focusbi_aside_collapsed') === '1')
 function toggleAside() {
   collapsed.value = !collapsed.value
   localStorage.setItem('focusbi_aside_collapsed', collapsed.value ? '1' : '0')
 }
+
+// 移动端 (<=768px): 侧栏改为抽屉浮层, 不占布局; 桌面维持展开/收起。
+const isMobile = ref(window.innerWidth <= 768)
+const drawerOpen = ref(false)
+function onResize() {
+  isMobile.value = window.innerWidth <= 768
+  if (!isMobile.value) drawerOpen.value = false
+}
+onMounted(() => window.addEventListener('resize', onResize))
+onUnmounted(() => window.removeEventListener('resize', onResize))
 
 const isLoginPage = computed(() => route.name === 'login')
 
@@ -89,7 +98,7 @@ async function logout() {
   router.push({ name: 'login' })
 }
 
-watch(() => route.fullPath, () => { loadReports(); if (!perm.loaded) loadMe() })
+watch(() => route.fullPath, () => { loadReports(); if (!perm.loaded) loadMe(); drawerOpen.value = false })
 onMounted(() => { loadReports(); loadMe() })
 </script>
 
@@ -97,9 +106,17 @@ onMounted(() => { loadReports(); loadMe() })
   <!-- 登录页: 不套后台框架 -->
   <router-view v-if="isLoginPage" />
 
-  <el-container v-else class="layout">
-    <!-- 收起态: 窄栏, 顶层导航图标 -->
-    <div v-if="collapsed" class="aside-mini">
+  <el-container v-else class="layout" :class="{ mobile: isMobile }">
+    <!-- 移动端顶栏: 汉堡按钮唤出抽屉 -->
+    <div v-if="isMobile" class="mobile-topbar">
+      <el-icon class="hamburger" @click="drawerOpen = true"><Expand /></el-icon>
+      <span class="m-brand"><el-icon><DataAnalysis /></el-icon>FocusBI</span>
+    </div>
+    <!-- 移动端遮罩: 点击关闭抽屉 -->
+    <div v-if="isMobile && drawerOpen" class="backdrop" @click="drawerOpen = false"></div>
+
+    <!-- 桌面收起态: 窄栏, 顶层导航图标 (移动端不渲染) -->
+    <div v-if="!isMobile && collapsed" class="aside-mini">
       <el-icon class="mini-logo"><DataAnalysis /></el-icon>
       <el-tooltip content="展开侧边栏" placement="right">
         <el-icon class="mini-btn" @click="toggleAside"><Expand /></el-icon>
@@ -119,8 +136,9 @@ onMounted(() => { loadReports(); loadMe() })
       </el-tooltip>
     </div>
 
-    <!-- 展开态 -->
-    <el-aside v-else width="230px" class="aside">
+    <!-- 展开态: 桌面侧栏 或 移动端抽屉浮层 -->
+    <el-aside v-if="isMobile || !collapsed" width="230px" class="aside"
+      :class="{ 'aside-drawer': isMobile, open: drawerOpen }">
       <div class="logo">
         <span class="logo-brand"><el-icon><DataAnalysis /></el-icon><span>FocusBI</span></span>
         <el-tooltip content="收起侧边栏" placement="right">
@@ -192,4 +210,17 @@ onMounted(() => { loadReports(); loadMe() })
 .bar-btn:hover { background: #2c3342; color: #fff; }
 /* 内容区背景: EP 页面背景变量, 亮色浅灰 / 暗色自动变深 */
 .main { background: var(--el-bg-color-page); padding: 20px; overflow-y: auto; }
+
+/* ---- 移动端 (<=768px): 侧栏抽屉化 ---- */
+.mobile-topbar { position: fixed; top: 0; left: 0; right: 0; height: 50px; z-index: 1000;
+  display: flex; align-items: center; gap: 12px; padding: 0 14px; box-sizing: border-box;
+  background: #1f2430; color: #fff; }
+.hamburger { font-size: 22px; cursor: pointer; }
+.m-brand { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; }
+.layout.mobile { display: block; height: auto; min-height: 100vh; }
+.layout.mobile .main { padding-top: 66px; }
+.aside-drawer { position: fixed; top: 0; left: 0; height: 100vh; z-index: 1002;
+  transform: translateX(-100%); transition: transform .22s ease; }
+.aside-drawer.open { transform: translateX(0); }
+.backdrop { position: fixed; inset: 0; background: rgba(0, 0, 0, .45); z-index: 1001; }
 </style>
