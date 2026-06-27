@@ -46,6 +46,9 @@ type EngineConf struct {
 	// QueryTimeout 单次数据源查询超时, Go duration 字符串, 如 "30s" / "3m"。
 	// 为空或非法时使用默认值。
 	QueryTimeout string `json:"query_timeout" yaml:"query_timeout" env:"QUERY_TIMEOUT"`
+	// QueryConcurrency 同一报表内独立 SQL 区块的并发查询数 (worker 池大小)。
+	// <=0 时回退默认值; 设为 1 即退回逐块串行执行。
+	QueryConcurrency int `json:"query_concurrency" yaml:"query_concurrency" env:"QUERY_CONCURRENCY"`
 }
 
 type Conf struct {
@@ -87,6 +90,16 @@ func (c *Conf) QueryTimeoutDuration() time.Duration {
 		return defaultQueryTimeout
 	}
 	return d
+}
+
+const defaultQueryConcurrency = 8
+
+// QueryConcurrency 返回报表内独立 SQL 区块的并发查询数。未配置/非正数时回退默认 8。
+func (c *Conf) QueryConcurrency() int {
+	if c == nil || c.Engine.QueryConcurrency <= 0 {
+		return defaultQueryConcurrency
+	}
+	return c.Engine.QueryConcurrency
 }
 
 var ConfInstance *Conf

@@ -3,6 +3,9 @@ package engine
 import (
 	"fmt"
 	"strings"
+	"sync"
+
+	"xproxy/conf"
 
 	"github.com/spf13/cast"
 )
@@ -14,6 +17,8 @@ type Runner struct {
 	// authz 在执行触达某数据源前校验调用者权限 (按实际 dsn 名)。
 	// nil 表示不校验 (公开分享 / 订阅推送等已预授权的入口)。
 	authz func(dsn string) error
+	// concurrency 独立 SQL 区块的并发预取数。<=0 时 Run 取 conf 默认值。
+	concurrency int
 }
 
 func NewRunner(defaultDSN string) *Runner {
@@ -38,6 +43,14 @@ func (r *Runner) WithAuthz(fn func(dsn string) error) *Runner {
 	return &cp
 }
 
+// WithConcurrency 返回一个指定 SQL 区块并发预取数的 Runner 副本 (主要供测试覆写)。
+// n<=0 时 Run 回退到 conf 配置 (默认 8)。
+func (r *Runner) WithConcurrency(n int) *Runner {
+	cp := *r
+	cp.concurrency = n
+	return &cp
+}
+
 // Parse 仅解析过滤器, 不执行 SQL —— 用于前端首次渲染输入控件。
 func Parse(content string) []FilterDef {
 	filters, _ := parseFilters(content)
@@ -53,6 +66,19 @@ func (r *Runner) Run(content string, params map[string]string) (*Result, error) 
 	macros := macroValues(filters, params)
 
 	result := &Result{Filters: filters, Blocks: []Block{}}
+
+	// 解析所有区块一次 (避免装配阶段重复 parse)。
+	parsed := make([]*rawBlock, 0)
+	for _, rawText := range splitBlocks(cleaned) {
+		if strings.TrimSpace(rawText) == "" {
+			continue
+		}
+		parsed = append(parsed, parseBlock(rawText))
+	}
+
+	// 阶段 1: 并发预取所有独立 SQL 区块的数据 (查询 + 数据管线)。
+	// 纯 SQL 块的 runSQLData 是自包含的, 无跨块依赖, 故可并行; 脚本/markdown 不预取。
+	prefetched := r.prefetchSQL(parsed, macros)
 
 	// pending 是尚未定稿的合并组基底 (延迟一拍推送):
 	// SQL 块默认先挂起, 若紧随的 SQL 块带 @join/@union 则并入它, 否则先推送再换基底。
@@ -79,13 +105,8 @@ func (r *Runner) Run(content string, params map[string]string) (*Result, error) 
 		pending = nil
 	}
 
-	for _, rawText := range splitBlocks(cleaned) {
-		if strings.TrimSpace(rawText) == "" {
-			continue
-		}
-
-		rb := parseBlock(rawText)
-
+	// 阶段 2: 按模板顺序串行装配 (块序/消息序与串行执行完全一致)。
+	for i, rb := range parsed {
 		// 脚本区块: 不走宏替换 (JS 的 {} 会与宏占位冲突), 参数通过注入的 params 读取。
 		// 脚本可产出多个区块, 与单 block 模型不同, 单独处理。
 		if rb.kind == "script" {
@@ -100,31 +121,31 @@ func (r *Runner) Run(content string, params map[string]string) (*Result, error) 
 			continue
 		}
 
-		// 行级条件宏: 整块跳过判断 (块首 `-- {?cond}` 经 applyMacros 处理)
-		body := applyMacros(rb.body, macros)
-		body = strings.TrimSpace(body)
-		if body == "" || rb.kind == "empty" {
-			continue
-		}
-
 		switch rb.kind {
 		case "markdown", "raw":
+			// 行级条件宏: 整块跳过判断 (块首 `-- {?cond}` 经 applyMacros 处理)
+			if strings.TrimSpace(applyMacros(rb.body, macros)) == "" {
+				continue
+			}
 			flush()
 			block := Block{ID: annotationString(rb, "id"), Title: annotationString(rb, "title"), Type: rb.kind}
 			block.Hidden = annotationBool(rb, "hidden")
 			block.Markdown = applyMacros(stripMarker(rb.body), macros)
 			appendBlock(block)
 		case "sql":
-			cols, rows, flipped, sql, errStr := r.runSQLData(rb, body)
+			sd := prefetched[i]
+			if sd == nil {
+				continue // 空 body (行级条件宏删空) -> 跳过, 与串行一致
+			}
 			spec, isMerge := parseJoinConfig(rb.annotations)
 			// 带 @join/@union 且已有挂起基底 -> 并入基底, 不新开块。
 			if isMerge && pending != nil {
-				pending.merge(spec, cols, rows, errStr)
+				pending.merge(spec, sd.cols, sd.rows, sd.errStr)
 				continue
 			}
 			// 否则定稿上一个基底, 自己成为新的挂起基底。
 			flush()
-			pending = newMergeGroup(rb, cols, rows, flipped, sql, errStr)
+			pending = newMergeGroup(rb, sd.cols, sd.rows, sd.flipped, sd.sql, sd.errStr)
 		default:
 			continue
 		}
@@ -132,6 +153,83 @@ func (r *Runner) Run(content string, params map[string]string) (*Result, error) 
 	flush()
 
 	return result, nil
+}
+
+// sqlData 是一个 SQL 区块预取阶段的产出 (runSQLData 的返回值打包)。
+type sqlData struct {
+	cols    []string
+	rows    []map[string]any
+	flipped bool
+	sql     string
+	errStr  string
+}
+
+// prefetchSQL 并发执行所有独立 SQL 区块的数据阶段, 返回与 parsed 等长的结果切片
+// (非 SQL 块、或宏替换后 body 为空的块对应 nil)。每个 goroutine 只写自己的下标, 无写竞争。
+func (r *Runner) prefetchSQL(parsed []*rawBlock, macros map[string]string) []*sqlData {
+	out := make([]*sqlData, len(parsed))
+
+	// 收集待执行的 SQL 块下标及其宏替换后的 body。
+	type job struct {
+		idx  int
+		rb   *rawBlock
+		body string
+	}
+	var jobs []job
+	for i, rb := range parsed {
+		if rb.kind != "sql" {
+			continue
+		}
+		body := strings.TrimSpace(applyMacros(rb.body, macros))
+		if body == "" {
+			continue // 空 body (行级条件宏删空) -> 留 nil
+		}
+		jobs = append(jobs, job{idx: i, rb: rb, body: body})
+	}
+	if len(jobs) == 0 {
+		return out
+	}
+
+	n := r.concurrency
+	if n <= 0 {
+		n = conf.Get().QueryConcurrency()
+	}
+	if n > len(jobs) {
+		n = len(jobs)
+	}
+
+	run := func(j job) {
+		// 兜底: runSQLData 只返回 in-band errStr, 但并发下意外 panic 不应拖垮整个报表。
+		defer func() {
+			if rec := recover(); rec != nil {
+				out[j.idx] = &sqlData{sql: j.body, errStr: fmt.Sprintf("区块执行异常: %v", rec)}
+			}
+		}()
+		cols, rows, flipped, sql, errStr := r.runSQLData(j.rb, j.body)
+		out[j.idx] = &sqlData{cols: cols, rows: rows, flipped: flipped, sql: sql, errStr: errStr}
+	}
+
+	if n == 1 {
+		// 串行回退: 不起 goroutine, 行为与原实现等价。
+		for _, j := range jobs {
+			run(j)
+		}
+		return out
+	}
+
+	sem := make(chan struct{}, n)
+	var wg sync.WaitGroup
+	for _, j := range jobs {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(j job) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			run(j)
+		}(j)
+	}
+	wg.Wait()
+	return out
 }
 
 // runSQLData 执行 SQL 区块的"数据阶段": 查询 + 数据管线 (filter/date_line/sort/series/flip),
