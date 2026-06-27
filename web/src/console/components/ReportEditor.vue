@@ -309,9 +309,17 @@ defineExpose({ save, reload: load })
 .editor-page { display: flex; flex-direction: column; height: 100%; min-height: 0; }
 .prepend { margin-bottom: 16px; }
 .toolbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; flex: none; }
-.left { display: flex; align-items: center; gap: 8px; }
+.left { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .title { font-weight: 600; }
 .actions { display: flex; gap: 8px; }
+
+/* 移动端: 标题与按钮组换行, 标题截断, 按钮可换行不挤压 */
+@media (max-width: 768px) {
+  .toolbar { flex-wrap: wrap; gap: 8px; }
+  .left { flex: 1 1 100%; }
+  .title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .actions { flex-wrap: wrap; }
+}
 
 .edit-row { flex: 1; min-height: 0; }
 .edit-col { height: 100%; }

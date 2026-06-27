@@ -162,4 +162,13 @@ onMounted(load)
 .share-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
 .share-hint { font-size: 12px; color: var(--el-text-color-secondary); line-height: 1.6; margin: 0 0 14px; }
 .share-actions { margin-top: 8px; text-align: right; }
+
+/* 移动端: 标题与按钮组换行, 标题截断, 按钮可换行不挤压 */
+@media (max-width: 768px) {
+  .toolbar { flex-wrap: wrap; gap: 8px; }
+  .title-wrap { flex: 1 1 100%; }
+  .title { font-size: 16px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .actions { flex-wrap: wrap; }
+  .sheet { padding: 14px; }
+}
 </style>
