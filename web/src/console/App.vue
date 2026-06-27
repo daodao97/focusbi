@@ -49,7 +49,7 @@ const navItems = computed(() => {
   const items = [
     { path: '/reports', label: '报表', icon: DataAnalysis },
     { path: '/dsn', label: '数据源', icon: Coin },
-    { path: '/tokens', label: 'API 令牌', icon: Key }
+    { path: '/tokens', label: 'MCP 令牌', icon: Key }
   ]
   if (canManageSub.value) {
     items.push({ path: '/subscriptions', label: '订阅管理', icon: Bell })
@@ -133,7 +133,7 @@ onMounted(() => { loadReports(); loadMe() })
         </el-sub-menu>
         <el-menu-item index="/reports"><el-icon><Document /></el-icon><span>全部报表</span></el-menu-item>
         <el-menu-item index="/dsn"><el-icon><Coin /></el-icon><span>数据源</span></el-menu-item>
-        <el-menu-item index="/tokens"><el-icon><Key /></el-icon><span>API 令牌</span></el-menu-item>
+        <el-menu-item index="/tokens"><el-icon><Key /></el-icon><span>MCP 令牌</span></el-menu-item>
         <el-menu-item v-if="canManageSub" index="/subscriptions"><el-icon><Bell /></el-icon><span>订阅管理</span></el-menu-item>
         <template v-if="isAdmin">
           <el-menu-item index="/users"><el-icon><User /></el-icon><span>用户管理</span></el-menu-item>

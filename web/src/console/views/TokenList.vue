@@ -83,7 +83,7 @@ onMounted(load)
   <div class="page">
     <div class="head">
       <div>
-        <h2>API 令牌</h2>
+        <h2>MCP 令牌</h2>
         <p class="hint">用于 MCP 等程序化访问 (如在 Codex / Claude Code 中开发报表)。令牌继承你本人的权限。</p>
       </div>
       <div class="actions">
@@ -112,7 +112,7 @@ onMounted(load)
     </el-table>
 
     <!-- 创建弹窗 -->
-    <el-dialog v-model="dialog" title="生成 API 令牌" width="460px">
+    <el-dialog v-model="dialog" title="生成 MCP 令牌" width="460px">
       <el-form label-width="90px">
         <el-form-item label="名称">
           <el-input v-model="form.name" placeholder="如: 我的 Claude Code" />
