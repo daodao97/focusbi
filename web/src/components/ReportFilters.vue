@@ -144,4 +144,14 @@ watch(
 .filter-row { display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-end; }
 .filter-item { display: flex; flex-direction: column; gap: 4px; }
 .filter-item label { font-size: 12px; color: var(--el-text-color-secondary); }
+
+/* 移动端: 控件固定宽 (160~360px) 会超出窗口, 改为每项占满整行, 输入控件随之 100%。 */
+@media (max-width: 640px) {
+  .filter-row { gap: 12px; }
+  .filter-item { width: 100%; }
+  .filter-item :deep(.el-select),
+  .filter-item :deep(.el-input),
+  .filter-item :deep(.el-date-editor) { width: 100% !important; }
+  .filter-row > .el-button { width: 100%; }
+}
 </style>

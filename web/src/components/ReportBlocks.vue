@@ -1,5 +1,5 @@
 <script setup>
-import { ref, defineAsyncComponent } from 'vue'
+import { ref, computed, defineAsyncComponent } from 'vue'
 import { ElMessage } from 'element-plus'
 import { InfoFilled } from '@element-plus/icons-vue'
 import { copyText } from '@/clipboard'
@@ -25,6 +25,8 @@ defineProps({
 const sqlDialog = ref(false)
 const sqlText = ref('')
 const sqlTitle = ref('')
+// 抽屉宽度: 桌面右侧 50%, 移动端铺满 (50% 在手机上只剩一半屏, 不可用)。
+const drawerSize = computed(() => (window.innerWidth <= 640 ? '100%' : '50%'))
 
 function showSql(b) {
   sqlText.value = b.sql || ''
@@ -246,7 +248,7 @@ function summaryCell(b, type, col, idx) {
     </section>
 
     <!-- SQL 抽屉: 右侧弹出, 只读 Monaco 展示, 带高亮 -->
-    <el-drawer v-model="sqlDialog" :title="`实际执行 SQL · ${sqlTitle}`" direction="rtl" size="50%"
+    <el-drawer v-model="sqlDialog" :title="`实际执行 SQL · ${sqlTitle}`" direction="rtl" :size="drawerSize"
       append-to-body :destroy-on-close="true">
       <SqlEditor v-if="sqlDialog" :model-value="sqlText" readonly height="100%" />
       <template #footer>
@@ -288,8 +290,8 @@ function summaryCell(b, type, col, idx) {
 .md-body :deep(table) { border-collapse: collapse; }
 .md-body :deep(th), .md-body :deep(td) { border: 1px solid var(--el-border-color-light); padding: 6px 12px; }
 
-/* 合计 / 平均 汇总条: 与表格列对齐的简易行 */
-.summary { margin-top: 4px; border-top: 2px solid var(--el-border-color); }
+/* 合计 / 平均 汇总条: 与表格列对齐的简易行; 窄屏随表格一起横向滚动, 不撑破布局 */
+.summary { margin-top: 4px; border-top: 2px solid var(--el-border-color); overflow-x: auto; }
 .sum-row { display: flex; background: var(--el-fill-color-light); font-size: 12px; }
 .sum-cell {
   flex: 1;

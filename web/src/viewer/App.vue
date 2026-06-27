@@ -110,4 +110,11 @@ onMounted(load)
 .content { max-width: 1200px; margin: 0 auto; padding: 20px; }
 .sheet { background: var(--el-bg-color); border-radius: 8px; padding: 24px; }
 .prepend { margin-bottom: 16px; }
+
+/* 移动端: 收紧内边距, 顶栏允许换行, 内容区表格可横向滚动而非撑破布局。 */
+@media (max-width: 640px) {
+  .top { flex-wrap: wrap; gap: 8px; padding: 10px 14px; }
+  .content { padding: 12px; }
+  .sheet { padding: 14px; border-radius: 6px; }
+}
 </style>

@@ -18,8 +18,9 @@ const route = useRoute()
 const router = useRouter()
 const reports = ref([])
 
-// 侧边栏收起状态 (记住偏好)
-const collapsed = ref(localStorage.getItem('focusbi_aside_collapsed') === '1')
+// 侧边栏收起状态 (记住偏好); 移动端无保存偏好时默认收起 (230px 侧栏会挤垮窄屏)。
+const asidePref = localStorage.getItem('focusbi_aside_collapsed')
+const collapsed = ref(asidePref === '1' || (asidePref === null && window.innerWidth <= 768))
 function toggleAside() {
   collapsed.value = !collapsed.value
   localStorage.setItem('focusbi_aside_collapsed', collapsed.value ? '1' : '0')
