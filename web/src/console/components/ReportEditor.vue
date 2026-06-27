@@ -146,7 +146,7 @@ async function save(silent = false) {
     }
     savedSnapshot.value = editSnapshot() // 保存成功 -> 重置"已保存"基线, draftDirty 归零
     if (!silent) {
-      ElMessage.success('草稿已保存')
+      ElMessage.success('已保存')
       // action='save': 仅存草稿, 宿主不应跳转 (留在编辑器继续改)
       emit('saved', id, 'save')
     }
@@ -213,7 +213,7 @@ defineExpose({ save, reload: load })
         <el-button v-if="report.id" text @click="versionOpen = true">历史版本</el-button>
         <template v-if="mode === 'edit'">
           <el-button :loading="previewing" @click="doPreview">预览</el-button>
-          <el-button :disabled="!draftDirty || !nameValid" @click="save">保存草稿</el-button>
+          <el-button :disabled="!draftDirty || !nameValid" @click="save">保存</el-button>
           <el-tooltip :content="publishHint" :disabled="!publishHint" placement="top">
             <span>
               <el-button type="primary" :disabled="!dirty || !nameValid" :loading="publishing"
@@ -223,7 +223,7 @@ defineExpose({ save, reload: load })
         </template>
         <template v-else>
           <el-button @click="cancelPreview">取消预览</el-button>
-          <el-button :disabled="!draftDirty || !nameValid" @click="save">保存草稿</el-button>
+          <el-button :disabled="!draftDirty || !nameValid" @click="save">保存</el-button>
           <el-tooltip :content="publishHint" :disabled="!publishHint" placement="top">
             <span>
               <el-button type="primary" :disabled="!dirty || !nameValid" :loading="publishing"
