@@ -175,9 +175,9 @@ function summaryCell(b, type, col, idx) {
 <template>
   <div>
     <section v-for="b in blocks" :key="b.id" class="block">
-      <div class="block-header">
-        <!-- markdown/raw 默认无标题时不回退 block_N (难看); 数据块仍回退 id 作标签 -->
-        <span class="block-title">{{ b.title || ((b.type === 'markdown' || b.type === 'raw') ? '' : b.id) }}</span>
+      <!-- markdown/raw 无 CSV/SQL 按钮, 无标题时整个 header 留空, 直接隐藏 -->
+      <div v-if="!((b.type === 'markdown' || b.type === 'raw') && !b.title)" class="block-header">
+        <span class="block-title">{{ b.title || b.id }}</span>
         <TimingTooltip :timing="b.timing" />
         <span v-if="b.subtitle" class="block-subtitle">{{ b.subtitle }}</span>
         <span class="spacer" />
