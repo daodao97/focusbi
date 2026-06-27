@@ -27,6 +27,8 @@ const sqlText = ref('')
 const sqlTitle = ref('')
 // 抽屉宽度: 桌面右侧 50%, 移动端铺满 (50% 在手机上只剩一半屏, 不可用)。
 const drawerSize = computed(() => (window.innerWidth <= 640 ? '100%' : '50%'))
+// 表格最大高度: 桌面 480px; 移动端调矮 (480 占半屏, 表内滚动+页面滚动易混)。
+const tableMaxHeight = computed(() => (window.innerWidth <= 640 ? 360 : 480))
 
 function showSql(b) {
   sqlText.value = b.sql || ''
@@ -210,7 +212,7 @@ function summaryCell(b, type, col, idx) {
         <ChartBlock v-if="b.chart && b.rows && b.rows.length" :chart="b.chart" :rows="b.rows" />
 
         <template v-if="!b.invisible">
-          <el-table v-if="b.rows && b.rows.length" :data="b.rows" stripe size="small" max-height="480"
+          <el-table v-if="b.rows && b.rows.length" :data="b.rows" stripe size="small" :max-height="tableMaxHeight"
             :span-method="makeSpanMethod(b)" :row-class-name="makeRowClass(b)">
             <el-table-column
               v-for="c in b.columns" :key="c.name"
