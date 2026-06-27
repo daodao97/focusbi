@@ -215,6 +215,12 @@ func parseFilterType(s string) (typ, format string, opts []EnumOpt, multiple boo
 func macroValues(filters []FilterDef, params map[string]string) map[string]string {
 	macros := map[string]string{}
 
+	// 先收下所有 params: 非过滤器的派生值 (如 @setup 脚本 setParam 写入的 is_current)
+	// 也能作为 {name} 宏使用。下方过滤器循环会用类型化处理覆盖同名项。
+	for k, v := range params {
+		macros[k] = v
+	}
+
 	for _, f := range filters {
 		val, ok := params[f.Name]
 		if !ok || strings.TrimSpace(val) == "" {
@@ -240,7 +246,7 @@ func macroValues(filters []FilterDef, params map[string]string) map[string]strin
 }
 
 // sqlInList 把逗号分隔的多选值转成 SQL in-list: "a,b" -> "'a','b'"。
-// 单引号转义 (''), 防止经宏拼接产生注入。空值返回 '' (使 IN ('') 不命中而非语法错)。
+// 单引号转义 (”), 防止经宏拼接产生注入。空值返回 ” (使 IN (”) 不命中而非语法错)。
 func sqlInList(val string) string {
 	parts := strings.Split(val, ",")
 	quoted := make([]string, 0, len(parts))

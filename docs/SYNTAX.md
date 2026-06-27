@@ -689,6 +689,7 @@ result.table({
 | API | 说明 |
 |-----|------|
 | `params` | 查看者提交的过滤器**原始值** (字符串), 如 `params.day`; 多选为逗号串 `"web,app"` |
+| `setParam(name, value)` | 写回派生参数, 供后续 SQL 的 `{name}` 宏 / 条件行 `{?name}` 使用; **仅在 `@setup` 前置脚本里有效** (见 §11.1) |
 | `dataset(id)` | 按前面已执行 block 的 `@id` 读取 rows 副本 |
 | `block(id)` | 按前面已执行 block 的 `@id` 读取 `{id,type,title,subtitle,notice,columns,rows,summary,average,chart,sql,error,invisible,hidden,merge_cell}` 副本 |
 | `query(sql, args?, dsnOrOptions?, options?)` | 执行 SQL 返回行数组; `args` 为 `?` 占位参数 (**参数化, 防注入**); 可覆盖数据源和缓存 |
@@ -754,6 +755,31 @@ const rows2 = query(
 ```
 
 选项支持 `{dsn, sql_cache}`; `sql_cache` 也可写成 `cache` 或 `ttl`。
+
+### 11.1 前置脚本 `@setup` — 派生参数
+
+普通脚本块在所有 SQL 查询**之后**执行, 所以它 `setParam` 改的值后续 SQL 看不到。
+若要按过滤器值**派生新参数**给后续 SQL 用 (如"选中月份是否为当前月"), 在 `#!SCRIPT` 的标记行
+加 `@setup`: 这块会在**宏冻结前**抢先执行, `setParam` 写入的值即成为后续所有区块可用的 `{name}` 宏。
+
+```
+${month|统计月份|today|date[Y-m]}
+
+#!SCRIPT @setup
+// 派生 is_current: 选中月份等于当前月时为 '1', 否则空串
+setParam('is_current', params.month === formatDate(now(), 'Y-m') ? '1' : '')
+#!END
+
+-- 当前月查实时表, 历史月查归档表 (条件行二选一)
+SELECT * FROM api_log              -- {?is_current}
+SELECT * FROM api_log_{month[Y_m]} -- {?!is_current}
+WHERE ...;
+```
+
+- `@setup` 块**只为副作用** (`setParam`), 它产出的 `result.*` / `log` 会被忽略, 不渲染区块。
+- 可写多个 `@setup` 块, 按出现顺序执行; 都在宏冻结前完成。
+- 派生参数名可任取 (`is_current`/`tier`/...), 不必是已声明的过滤器。
+- `@setup` 脚本里 `query()` 可用 (查库派生值), 但它跑在并发预取**之前**, 串行执行, 别放重活。
 
 ### 复用前置 Block 数据
 

@@ -116,7 +116,6 @@ func (r *Runner) Run(content string, params map[string]string) (ret *Result, err
 	filters, cleaned := parseFilters(content)
 	resolveDefaults(filters)
 	r.resolveFilterOptions(filters) // enum_sql: 查库填充动态选项
-	macros := macroValues(filters, params)
 
 	result := &Result{Filters: filters, Blocks: []Block{}}
 
@@ -143,6 +142,22 @@ func (r *Runner) Run(content string, params map[string]string) (ret *Result, err
 		parsed = append(parsed, rb)
 	}
 	parsedCount = len(parsed)
+
+	// 阶段 0: 前置脚本 (`#!SCRIPT @setup`)。在宏冻结前串行执行, 可 setParam 派生新值
+	// (如按选中月份算 is_current), 供后续 SQL 的 {macro} / 条件行使用。
+	// 这些块在主装配循环里跳过, 不再重复执行, 也不产出区块。
+	for _, rb := range parsed {
+		if rb.kind == "script" && annotationBool(rb, "setup") {
+			if params == nil {
+				params = map[string]string{} // setParam 需可写
+			}
+			ctx := scriptContext{defaultDSN: r.defaultDSN, params: params, authz: r.authz, noCache: r.noCache}
+			runScript(stripMarker(rb.body), ctx) // 只为副作用 (setParam); 忽略产出
+		}
+	}
+
+	// 宏在此冻结: 基于增广后的 params (含 @setup 写入的派生值)。此后并发预取与装配都用它。
+	macros := macroValues(filters, params)
 
 	// 阶段 1: 并发预取所有独立 SQL 区块的数据 (查询 + 数据管线)。
 	// 纯 SQL 块的 runSQLData 是自包含的, 无跨块依赖, 故可并行; 脚本/markdown 不预取。
@@ -178,6 +193,9 @@ func (r *Runner) Run(content string, params map[string]string) (ret *Result, err
 		// 脚本区块: 不走宏替换 (JS 的 {} 会与宏占位冲突), 参数通过注入的 params 读取。
 		// 脚本可产出多个区块, 与单 block 模型不同, 单独处理。
 		if rb.kind == "script" {
+			if annotationBool(rb, "setup") {
+				continue // 前置脚本已在阶段 0 执行, 不产出区块
+			}
 			flush()
 			started := time.Now()
 			ctx := scriptContext{defaultDSN: r.defaultDSN, params: params, authz: r.authz, blocks: blockRefs, noCache: r.noCache}

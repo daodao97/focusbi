@@ -34,6 +34,32 @@ func TestParseBlockScriptKind(t *testing.T) {
 	}
 }
 
+// @setup 前置脚本在宏冻结前 setParam, 派生值 (非过滤器名) 也能作为 {macro} 用。
+func TestSetupScriptDerivesParam(t *testing.T) {
+	// is_current 由 month 派生, 在 markdown 里用 {is_current} 宏回显 (无需数据库)。
+	content := "${month|月份|2026-06|string}\n" +
+		"#!SCRIPT @setup\n" +
+		"setParam('is_current', params.month === '2026-06' ? 'YES' : 'NO')\n" +
+		"#!END\n\n" +
+		"#!MARKDOWN\n当前月: {is_current}\n#!END\n"
+
+	res, err := NewRunner("default").Run(content, map[string]string{"month": "2026-06"})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(res.Blocks) != 1 || !strings.Contains(res.Blocks[0].Markdown, "当前月: YES") {
+		t.Fatalf("派生 is_current=YES 应进宏, got %+v", res.Blocks)
+	}
+
+	res, err = NewRunner("default").Run(content, map[string]string{"month": "2026-05"})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(res.Blocks) != 1 || !strings.Contains(res.Blocks[0].Markdown, "当前月: NO") {
+		t.Fatalf("派生 is_current=NO 应进宏, got %+v", res.Blocks)
+	}
+}
+
 func TestStripMarkerScript(t *testing.T) {
 	got := stripMarker("#!SCRIPT\nresult.table({rows:[]});\n#!END")
 	if strings.Contains(got, "#!SCRIPT") || strings.Contains(got, "#!END") {

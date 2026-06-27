@@ -79,6 +79,16 @@ func injectScriptAPI(vm *goja.Runtime, ctx scriptContext, acc *scriptResult) {
 	// params: 过滤器值 (只读 map)
 	_ = vm.Set("params", ctx.params)
 
+	// setParam(name, value): 写回 params, 供后续宏 {name} / 条件行 {?name} 使用。
+	// 仅在 @setup 前置脚本里有意义 (宏冻结前执行)。普通脚本块调用也会写, 但宏已冻结, 不影响 SQL。
+	_ = vm.Set("setParam", func(call goja.FunctionCall) goja.Value {
+		name := strings.TrimSpace(call.Argument(0).String())
+		if name != "" && ctx.params != nil {
+			ctx.params[name] = cast.ToString(call.Argument(1).Export())
+		}
+		return goja.Undefined()
+	})
+
 	// dataset(id) / block(id): 读取前面已执行完成的 block 数据。
 	// dataset 只返回 rows, block 返回带 columns/summary 等元数据的对象。
 	_ = vm.Set("dataset", func(call goja.FunctionCall) goja.Value {

@@ -110,7 +110,16 @@ func parseBlock(raw string) *rawBlock {
 	// 脚本是避免 JS 被误解析; markdown/raw 是避免正文里的 `-- @x` 被当成块注解抽走。
 	trimmed := strings.TrimSpace(raw)
 	if strings.HasPrefix(trimmed, "#!SCRIPT") {
-		b.body = trimmed
+		// 标记行可带指令, 如 `#!SCRIPT @setup` (前置执行: 宏冻结前 setParam 改写 params)。
+		// 抽出指令后正文保持纯 JS, 不污染脚本。
+		markerLine, rest := trimmed, ""
+		if nl := strings.IndexByte(trimmed, '\n'); nl >= 0 {
+			markerLine, rest = trimmed[:nl], trimmed[nl:]
+		}
+		if strings.Contains(markerLine, "@setup") {
+			b.annotations["setup"] = true
+		}
+		b.body = "#!SCRIPT" + rest
 		b.kind = "script"
 		return b
 	}
