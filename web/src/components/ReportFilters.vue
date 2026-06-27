@@ -1,5 +1,6 @@
 <script setup>
 import { watch } from 'vue'
+import { t } from '@/locale'
 
 // 依据引擎返回的 filters 渲染交互输入控件, 通过 v-model 双向绑定 params。
 const props = defineProps({
@@ -103,7 +104,7 @@ watch(
           :model-value="f.multiple ? enumToArray(modelValue[f.name]) : (modelValue[f.name] || '')"
           @update:model-value="v => setEnum(f.name, v)"
           :multiple="!!f.multiple" :collapse-tags="!!f.multiple" collapse-tags-tooltip
-          placeholder="全部" clearable :style="{ width: f.multiple ? '220px' : '160px' }">
+          :placeholder="t('all')" clearable :style="{ width: f.multiple ? '220px' : '160px' }">
           <el-option v-for="o in f.options" :key="o.value" :label="o.label" :value="o.value" />
         </el-select>
 
@@ -117,7 +118,7 @@ watch(
           :model-value="rangeToArray(modelValue[f.name])"
           @update:model-value="v => setRange(f.name, v)"
           :type="rangeConf(f).type" :value-format="rangeConf(f).valueFormat"
-          range-separator="至" start-placeholder="开始" end-placeholder="结束"
+          :range-separator="t('rangeSep')" :start-placeholder="t('start')" :end-placeholder="t('end')"
           unlink-panels :style="{ width: rangeConf(f).width }" />
 
         <el-date-picker
@@ -133,7 +134,7 @@ watch(
           @update:model-value="v => set(f.name, v)"
           :type="f.type === 'number' ? 'number' : 'text'" style="width: 160px" />
       </div>
-      <el-button type="primary" :loading="loading" @click="emit('run')">查询</el-button>
+      <el-button type="primary" :loading="loading" @click="emit('run')">{{ t('query') }}</el-button>
     </div>
   </div>
 </template>

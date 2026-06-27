@@ -7,6 +7,7 @@ import '@/theme'
 import '@/styles.css'
 import App from './App.vue'
 import { getToken, setUnauthorizedHandler } from '@/api'
+import { elementLocale } from '@/locale'
 
 const routes = [
   { path: '/login', name: 'login', component: () => import('./views/Login.vue'), meta: { public: true } },
@@ -38,4 +39,4 @@ setUnauthorizedHandler(() => {
   }
 })
 
-createApp(App).use(router).use(ElementPlus).mount('#app')
+createApp(App).use(router).use(ElementPlus, { locale: elementLocale }).mount('#app')
