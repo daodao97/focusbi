@@ -67,6 +67,26 @@ function colNeedsSlot(b, col) {
   return colHasTag(b, col) || !!(col.config && (col.config.href || col.config.tooltip))
 }
 
+// 是否允许列排序: merge_cell(rowspan) / cell_attrs / row_attrs 都按行下标绑定,
+// el-table 前端排序会重排行序, 导致这些下标错位。故仅"纯净"表启用排序。
+function canSort(b) {
+  return b.rows && b.rows.length > 1 &&
+    !(b.merge_cell && b.merge_cell.length) &&
+    !(b.cell_attrs && Object.keys(b.cell_attrs).length) &&
+    !(b.row_attrs && Object.keys(b.row_attrs).length)
+}
+
+// 列排序比较器: 两值都能转数字则按数字, 否则按 localeCompare。
+// 引擎返回的数值常是字符串("1000"), 默认字符串排序会把 "1000" 排在 "9" 前面, 故特判。
+function sortBy(name) {
+  return (ra, rb) => {
+    const a = ra[name], b = rb[name]
+    const na = Number(a), nb = Number(b)
+    if (a !== '' && b !== '' && a != null && b != null && !isNaN(na) && !isNaN(nb)) return na - nb
+    return String(a ?? '').localeCompare(String(b ?? ''))
+  }
+}
+
 // 行级样式 (row_attrs): el-table row-class-name 回调。
 function makeRowClass(b) {
   if (!b.row_attrs) return undefined
@@ -215,7 +235,8 @@ function summaryCell(b, type, col, idx) {
             :span-method="makeSpanMethod(b)" :row-class-name="makeRowClass(b)">
             <el-table-column
               v-for="c in b.columns" :key="c.name"
-              :prop="c.name" :label="c.header" show-overflow-tooltip min-width="120">
+              :prop="c.name" :label="c.header" show-overflow-tooltip min-width="120"
+              :sortable="canSort(b)" :sort-method="canSort(b) ? sortBy(c.name) : undefined">
               <template v-if="colNeedsSlot(b, c)" #default="{ row, $index }">
                 <el-tag v-if="cellTag(b, c, $index)" :type="cellTag(b, c, $index).type || 'info'"
                   :effect="cellTag(b, c, $index).plain ? 'plain' : 'light'" size="small"
