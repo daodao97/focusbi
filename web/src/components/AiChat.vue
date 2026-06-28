@@ -1,9 +1,8 @@
 <script setup>
 import { ref, nextTick } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Markdown } from 'vue-stream-markdown'
-import 'vue-stream-markdown/index.css'
-import 'vue-stream-markdown/theme.css'
+import MarkdownRender from 'markstream-vue'
+import 'markstream-vue/index.css'
 import { api } from '@/api'
 import { canReadDsnById } from '@/perm'
 
@@ -207,12 +206,12 @@ function onKeydown(e) {
             @{{ r.label }}
           </el-tag>
         </div>
-        <Markdown
+        <MarkdownRender
           v-if="m.role === 'ai' && msgBody(m)"
           :content="msgBody(m)"
-          mode="static"
-          :controls="false"
-          :previewers="false"
+          :final="true"
+          mode="chat"
+          html-policy="escape"
           class="msg-markdown" />
         <span v-else-if="msgBody(m)">{{ msgBody(m) }}</span>
       </div>
@@ -220,11 +219,12 @@ function onKeydown(e) {
 
     <div v-if="streamText" class="stream-text">
       <div class="stream-title">说明</div>
-      <Markdown
+      <MarkdownRender
         :content="streamText"
-        mode="streaming"
-        :controls="false"
-        :previewers="false"
+        :final="!busy"
+        mode="chat"
+        :typewriter="true"
+        html-policy="escape"
         class="stream-markdown-view" />
     </div>
 

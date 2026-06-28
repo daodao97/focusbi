@@ -9,11 +9,10 @@ import TimingTooltip from './TimingTooltip.vue'
 const ChartBlock = defineAsyncComponent(() => import('./ChartBlock.vue'))
 const KpiBlock = defineAsyncComponent(() => import('./KpiBlock.vue'))
 const SqlEditor = defineAsyncComponent(() => import('./SqlEditor.vue'))
-// markdown 区块用 vue-stream-markdown 渲染 (与 AI 对话同款); 异步加载, 无 markdown 区块不拉。
+// markdown 区块用 markstream-vue 渲染 (与 AI 对话同款); 异步加载, 无 markdown 区块不拉。
 const Markdown = defineAsyncComponent(async () => {
-  await import('vue-stream-markdown/index.css')
-  await import('vue-stream-markdown/theme.css')
-  return (await import('vue-stream-markdown')).Markdown
+  await import('markstream-vue/index.css')
+  return (await import('markstream-vue')).default
 })
 
 // 渲染引擎返回的 blocks: 表格 / 图表 / markdown。
@@ -198,7 +197,7 @@ function summaryCell(b, type, col, idx) {
 
       <!-- markdown 区块: 渲染 markdown 语法 (标题/列表/表格/代码等) -->
       <Markdown v-else-if="b.type === 'markdown'" :content="b.markdown || ''"
-        mode="static" :controls="false" :previewers="false" class="md-body" />
+        :final="true" mode="docs" html-policy="escape" class="md-body" />
 
       <!-- raw 区块: 原样输出, 不转 markdown (语义即此) -->
       <pre v-else-if="b.type === 'raw'" class="md">{{ b.markdown }}</pre>
