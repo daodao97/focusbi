@@ -105,14 +105,15 @@ type ReportTiming struct {
 
 // ChartConfig 是规整后的图表配置, 交给前端 ECharts 渲染。
 type ChartConfig struct {
-	Type   string   `json:"type"`             // line / bar / area / pie / scatter / funnel / gauge / radar
-	X      string   `json:"x,omitempty"`      // x 轴字段 (折线/柱状/面积/散点)
-	Y      string   `json:"y,omitempty"`      // 散点: y 轴字段
-	Series []string `json:"series,omitempty"` // 数值字段 (折线/柱状/面积/雷达)
-	Name   string   `json:"name,omitempty"`   // 饼图/漏斗: 分类字段
-	Value  string   `json:"value,omitempty"`  // 饼图/漏斗/仪表盘: 数值字段
-	Stack  bool     `json:"stack,omitempty"`  // 柱状/面积: 堆叠
-	Auto   bool     `json:"auto,omitempty"`   // __auto__
+	Type    string   `json:"type"`               // line / bar / area / pie / scatter / funnel / gauge / radar
+	X       string   `json:"x,omitempty"`        // x 轴字段 (折线/柱状/面积/散点)
+	XFields []string `json:"x_fields,omitempty"` // 多维 x 轴 (多个维度列拼成类目); 非空时前端优先用它
+	Y       string   `json:"y,omitempty"`        // 散点: y 轴字段
+	Series  []string `json:"series,omitempty"`   // 数值字段 (折线/柱状/面积/雷达)
+	Name    string   `json:"name,omitempty"`     // 饼图/漏斗: 分类字段
+	Value   string   `json:"value,omitempty"`    // 饼图/漏斗/仪表盘: 数值字段
+	Stack   bool     `json:"stack,omitempty"`    // 柱状/面积: 堆叠
+	Auto    bool     `json:"auto,omitempty"`     // __auto__
 }
 
 // KpiConfig 是一组 KPI 卡片, 交给前端 KpiBlock 渲染。数据本身复用 block.Rows。

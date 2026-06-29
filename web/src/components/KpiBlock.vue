@@ -7,39 +7,17 @@ const props = defineProps({
   rows: { type: Array, default: () => [] }
 })
 
+import { fmtNumber } from '@/format'
+
 function num(v) {
   const n = Number(String(v ?? '').replace(/,/g, '').replace(/%$/, ''))
   return Number.isFinite(n) ? n : 0
 }
 
-function addThousands(s) {
-  const neg = s.startsWith('-')
-  if (neg) s = s.slice(1)
-  const [int, frac] = s.split('.')
-  const grouped = int.replace(/\B(?=(\d{3})+(?!\d))/g, ',')
-  return (neg ? '-' : '') + grouped + (frac != null ? '.' + frac : '')
-}
-
-// 与后端 transform.go:formatCellValue 口径一致 (money/number/integer/percent)。
+// KPI 卡片数值: 空值显示 '-', 否则套用共享 fmtNumber (money/number/integer/percent)。
 function fmt(v, format) {
   if (v == null || v === '') return '-'
-  const n = Number(String(v).replace(/,/g, ''))
-  if (!Number.isFinite(n)) return String(v)
-  switch ((format || '').toLowerCase()) {
-    case 'money':
-    case 'currency':
-      return addThousands(n.toFixed(2))
-    case 'number':
-      return addThousands(String(n))
-    case 'integer':
-    case 'int':
-      return addThousands(n.toFixed(0))
-    case 'percent':
-    case 'percentage':
-      return (n * 100).toFixed(2) + '%'
-    default:
-      return String(v)
-  }
+  return String(fmtNumber(v, format) ?? v)
 }
 
 const last = computed(() => props.rows[props.rows.length - 1] || {})

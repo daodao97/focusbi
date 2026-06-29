@@ -588,7 +588,12 @@ func (g *mergeGroup) finalize() Block {
 	applyColumnPipeline(&block, rb.annotations["row_tag"], !g.flipped && annotationBool(rb, "sum"), !g.flipped && annotationBool(rb, "avg"))
 
 	if chart, ok := rb.annotations["chart"]; ok {
-		block.Chart = normalizeChart(chart, cols)
+		cc := normalizeChart(chart, cols)
+		block.Chart = cc
+		// X 轴重复值提示: 同一类目出现多次会让图表与多维表格行对不上 (反馈 2)。
+		if note := chartXDupNotice(cc, block.Rows); note != "" && block.Notice == "" {
+			block.Notice = note
+		}
 	}
 
 	if kpi, ok := rb.annotations["kpi"]; ok {

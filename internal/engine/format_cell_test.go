@@ -48,6 +48,23 @@ func TestApplyPercentColumns(t *testing.T) {
 	}
 }
 
+// format (money/integer/percent 等) 是纯展示格式, 不应在后端把 rows 改成字符串 —— 否则
+// 图表/排序/汇总读到 "14,112" 这种带逗号字符串会算错。这里断言数值保持原样, 由前端渲染时格式化。
+func TestApplyCellTransformsKeepsRawForFormat(t *testing.T) {
+	cols := []Column{
+		{Name: "total", Config: map[string]any{"format": "integer"}},
+		{Name: "gmv", Config: map[string]any{"format": "money"}},
+	}
+	rows := []map[string]any{{"total": 14112, "gmv": 9999.5}}
+	applyCellTransforms(cols, rows)
+	if rows[0]["total"] != 14112 {
+		t.Errorf("format 列应保持原始数值, got %v (%T)", rows[0]["total"], rows[0]["total"])
+	}
+	if rows[0]["gmv"] != 9999.5 {
+		t.Errorf("money 列应保持原始数值, got %v (%T)", rows[0]["gmv"], rows[0]["gmv"])
+	}
+}
+
 func TestApplyPercentConstBaseAndDot(t *testing.T) {
 	cols := []Column{{Name: "p", Config: map[string]any{"percent": map[string]any{"base": float64(200), "dot": float64(1)}}}}
 	rows := []map[string]any{{"p": 50}} // 50/200*100 = 25.0%

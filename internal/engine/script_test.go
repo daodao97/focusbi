@@ -364,11 +364,15 @@ func TestRunScriptChartConfigMetadataColumnsAndFormats(t *testing.T) {
 	if len(b.Columns) != 4 || b.Columns[1].Name != "本月销售额" || b.Columns[3].Name != "利润占比" {
 		t.Fatalf("列顺序错误: %+v", b.Columns)
 	}
-	if b.Rows[0]["本月销售额"] != "1,234.50" || b.Rows[0]["利润占比"] != "25.00%" {
-		t.Fatalf("formats 未生效: %+v", b.Rows[0])
+	// 新契约: format 是展示格式, rows 保持原始数值 (前端渲染时格式化), 仅写入列 config。
+	if b.Rows[0]["本月销售额"] != 1234.5 || b.Rows[0]["利润占比"] != 0.25 {
+		t.Fatalf("rows 应保持原始数值: %+v", b.Rows[0])
 	}
-	if b.Summary["本月销售额"] != "3,580.00" {
-		t.Fatalf("summary 格式错误: %+v", b.Summary)
+	if cfgFormat(b.Columns, "本月销售额") != "money" || cfgFormat(b.Columns, "利润占比") != "percent" {
+		t.Fatalf("format 应写入列 config: %+v", b.Columns)
+	}
+	if b.Summary["本月销售额"] != "3580" {
+		t.Fatalf("summary 应为原始数值: %+v", b.Summary)
 	}
 	if _, ok := b.Summary["利润占比"]; ok {
 		t.Fatalf("percent 列默认不应汇总: %+v", b.Summary)
@@ -394,8 +398,15 @@ func TestRunScriptTableCanCarryChartAndStringColumns(t *testing.T) {
 	if len(b.Columns) != 4 || b.Columns[0].Header != "月份" || b.Columns[3].Header != "销售额" {
 		t.Fatalf("columns 字符串写法错误: %+v", b.Columns)
 	}
-	if b.Rows[0]["订单数"] != "1,200" || b.Rows[0]["销售额"] != "45,678.90" {
-		t.Fatalf("formats 未生效: %+v", b.Rows[0])
+	// 新契约: rows 保持原始数值, format 仅写入列 config。
+	if v, _ := toFloat(b.Rows[0]["订单数"]); v != 1200 {
+		t.Fatalf("rows 应保持原始数值: %+v", b.Rows[0])
+	}
+	if v, _ := toFloat(b.Rows[0]["销售额"]); v != 45678.9 {
+		t.Fatalf("rows 应保持原始数值: %+v", b.Rows[0])
+	}
+	if cfgFormat(b.Columns, "订单数") != "number" || cfgFormat(b.Columns, "销售额") != "money" {
+		t.Fatalf("format 应写入列 config: %+v", b.Columns)
 	}
 	chart, ok := b.Chart.(*ChartConfig)
 	if !ok || chart.Type != "bar" || chart.X != "业务线" || len(chart.Series) != 1 || chart.Series[0] != "销售额" {
@@ -479,4 +490,16 @@ result.table({
 	if len(b.Rows) != 2 || doublePV != 200 {
 		t.Fatalf("dataset 引用数据错误: %+v", b.Rows)
 	}
+}
+
+// cfgFormat 取某列的 format 配置, 供测试断言 format 写入了列 config 而非改了 rows。
+func cfgFormat(cols []Column, name string) string {
+	for _, c := range cols {
+		if c.Name == name && c.Config != nil {
+			if f, ok := c.Config["format"].(string); ok {
+				return f
+			}
+		}
+	}
+	return ""
 }

@@ -69,6 +69,26 @@ func TestApplyMacrosConditionalColumn(t *testing.T) {
 	}
 }
 
+// 多选 enum 为空时, {name} 是 SQL in-list "”", 但 {?name} 行条件应判它为空 (看 _raw),
+// 从而删掉 `AND x IN ({name}) -- {?name}` 整行 = 不过滤; 有选时保留并展开。
+func TestApplyMacrosMultiSelectEmptyDropsLine(t *testing.T) {
+	sql := "SELECT * FROM t WHERE 1=1\n  AND service IN ({service}) -- {?service}"
+
+	// 空选: {service}="''" (SQL 编码), {service_raw}="" -> 整行删除
+	empty := map[string]string{"service": "''", "service_raw": ""}
+	got := applyMacros(sql, empty)
+	if strings.Contains(got, "service IN") {
+		t.Errorf("空选时 IN 行应被删除 (不过滤): %q", got)
+	}
+
+	// 有选: 行保留, {service} 展开为 in-list, 行尾条件注释去掉
+	picked := map[string]string{"service": "'a','b'", "service_raw": "a,b"}
+	got = applyMacros(sql, picked)
+	if !strings.Contains(got, "service IN ('a','b')") || strings.Contains(got, "{?service}") {
+		t.Errorf("有选时应保留并展开: %q", got)
+	}
+}
+
 func TestApplyMacrosSubstitute(t *testing.T) {
 	sql := "WHERE d >= '{from_date}' AND d <= '{to_date}'"
 	got := applyMacros(sql, map[string]string{"from_date": "2026-01-01", "to_date": "2026-01-07"})

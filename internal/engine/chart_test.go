@@ -63,3 +63,60 @@ func TestMapChartTypes(t *testing.T) {
 		}
 	}
 }
+
+// 显式多维 X 轴: bar[x=服务/处理方式]:总数 → XFields, Series 取指定列。
+func TestParseChartExplicitXFields(t *testing.T) {
+	cols := []string{"服务", "处理方式", "总数", "成功数"}
+	c := parseChartString("bar[x=服务/处理方式]:总数,成功数", cols)
+	if c.Type != "bar" {
+		t.Fatalf("type = %q, want bar", c.Type)
+	}
+	if len(c.XFields) != 2 || c.XFields[0] != "服务" || c.XFields[1] != "处理方式" {
+		t.Fatalf("XFields = %v, want [服务 处理方式]", c.XFields)
+	}
+	if c.X != "" {
+		t.Errorf("多维 X 轴不应再设单维 X: %q", c.X)
+	}
+	if len(c.Series) != 2 || c.Series[0] != "总数" {
+		t.Errorf("Series = %v", c.Series)
+	}
+}
+
+// 多维 X 轴不指定数值列时, Series 默认取剩余非 X 列。
+func TestParseChartXFieldsDefaultSeries(t *testing.T) {
+	cols := []string{"服务", "处理方式", "总数", "成功数"}
+	c := parseChartString("bar[x=服务/处理方式]", cols)
+	if len(c.Series) != 2 || c.Series[0] != "总数" || c.Series[1] != "成功数" {
+		t.Errorf("默认 Series 应为剩余列, got %v", c.Series)
+	}
+}
+
+// 对象写法: x 为数组 → XFields; 字符串 → X。
+func TestMapChartXArray(t *testing.T) {
+	cols := []string{"a", "b", "v"}
+	c := mapChart(map[string]any{"type": "bar", "x": []any{"a", "b"}, "series": []any{"v"}}, cols)
+	if len(c.XFields) != 2 || c.XFields[0] != "a" || c.XFields[1] != "b" {
+		t.Fatalf("XFields = %v", c.XFields)
+	}
+	c2 := mapChart(map[string]any{"type": "bar", "x": "a"}, cols)
+	if c2.X != "a" || len(c2.XFields) != 0 {
+		t.Errorf("字符串 x 应为单维 X: X=%q XFields=%v", c2.X, c2.XFields)
+	}
+}
+
+// X 轴重复值提示: 单维重复触发, 多维区分后不触发。
+func TestChartXDupNotice(t *testing.T) {
+	rows := []map[string]any{
+		{"服务": "GPT", "处理方式": "代付", "v": 1},
+		{"服务": "GPT", "处理方式": "退款", "v": 2}, // 服务列重复, 但 (服务,处理方式) 唯一
+	}
+	if chartXDupNotice(&ChartConfig{Type: "bar", X: "服务"}, rows) == "" {
+		t.Error("单维 X=服务 有重复值, 应提示")
+	}
+	if chartXDupNotice(&ChartConfig{Type: "bar", XFields: []string{"服务", "处理方式"}}, rows) != "" {
+		t.Error("多维 X 轴区分后无重复, 不应提示")
+	}
+	if chartXDupNotice(&ChartConfig{Type: "pie", Name: "服务"}, rows) != "" {
+		t.Error("非类目轴族不检查重复")
+	}
+}

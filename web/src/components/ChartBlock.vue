@@ -82,7 +82,10 @@ function buildOption() {
       // line / bar / area: 类目轴 + 多数值序列。
       const isBar = c.type === 'bar'
       const isArea = c.type === 'area'
-      const x = rows.map(r => r[c.x])
+      // 多维 X 轴 (x_fields): 把多个维度列拼成类目标签; 否则用单维 c.x。
+      const x = (c.x_fields && c.x_fields.length)
+        ? rows.map(r => c.x_fields.map(f => r[f]).join(' / '))
+        : rows.map(r => r[c.x])
       const series = (c.series || []).map(s => ({
         name: s,
         type: isBar ? 'bar' : 'line',

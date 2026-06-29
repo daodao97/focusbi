@@ -62,7 +62,13 @@ func shouldDrop(cond, name string, macros map[string]string) bool {
 
 func isEmpty(name string, macros map[string]string) bool {
 	for _, n := range strings.Split(name, ",") {
-		v := strings.TrimSpace(macros[strings.TrimSpace(n)])
+		n = strings.TrimSpace(n)
+		// 多选 enum 的 {name} 是 SQL in-list (空选时为 "''", 看着非空), 不能用来判空。
+		// 优先看原始选择值 {name_raw} (空选时才真的是 ""), 它才反映用户是否选了东西。
+		v := strings.TrimSpace(macros[n])
+		if raw, ok := macros[n+"_raw"]; ok {
+			v = strings.TrimSpace(raw)
+		}
 		if v != "" && v != "0" && strings.ToLower(v) != "false" {
 			return false
 		}

@@ -3,6 +3,7 @@ import { ref, computed, defineAsyncComponent } from 'vue'
 import { ElMessage } from 'element-plus'
 import { InfoFilled } from '@element-plus/icons-vue'
 import { copyText } from '@/clipboard'
+import { fmtNumber } from '@/format'
 import TimingTooltip from './TimingTooltip.vue'
 // ChartBlock(ECharts ~1MB) 与 SqlEditor(Monaco ~3MB) 体积大且仅按需出现,
 // 用异步组件拆分成独立 chunk: 无图表/不看 SQL 的页面不会加载它们。
@@ -62,9 +63,16 @@ function cellTag(b, col, rowIndex) {
 function colHasTag(b, col) {
   return !!(b.cell_attrs && b.cell_attrs[col.name])
 }
-// 是否需要自定义单元格渲染 (链接 / 提示 / 标签)
+// 是否需要自定义单元格渲染 (链接 / 提示 / 标签 / 数字格式化)
 function colNeedsSlot(b, col) {
-  return colHasTag(b, col) || !!(col.config && (col.config.href || col.config.tooltip))
+  return colHasTag(b, col) || !!(col.config && (col.config.href || col.config.tooltip || col.config.format))
+}
+
+// 单元格展示文本: 数值列按 config.format 格式化 (后端 rows 是原始数值, 格式化只在展示层)。
+function cellText(col, row) {
+  const v = row[col.name]
+  if (col.config && col.config.format) return fmtNumber(v, col.config.format)
+  return v
 }
 
 // 是否允许列排序: merge_cell(rowspan) / cell_attrs / row_attrs 都按行下标绑定,
@@ -96,12 +104,14 @@ function makeRowClass(b) {
   }
 }
 
-// 单元格展示值: 标签文本优先于原值 (导出时与界面一致)。
+// 单元格展示值: 标签文本优先于原值; 数值列按 format 格式化 (导出时与界面一致)。
 function displayValue(b, col, rowIndex, row) {
   const tag = cellTag(b, col, rowIndex)
   if (tag && tag.text) return tag.text
   const v = row[col.name]
-  return v === undefined || v === null ? '' : v
+  if (v === undefined || v === null) return ''
+  if (col.config && col.config.format) return fmtNumber(v, col.config.format)
+  return v
 }
 
 // 把单个字段转义为 CSV 字段 (含逗号/引号/换行时加引号)。
@@ -240,10 +250,10 @@ function summaryCell(b, type, col, idx) {
               <template v-if="colNeedsSlot(b, c)" #default="{ row, $index }">
                 <el-tag v-if="cellTag(b, c, $index)" :type="cellTag(b, c, $index).type || 'info'"
                   :effect="cellTag(b, c, $index).plain ? 'plain' : 'light'" size="small"
-                  :title="cellTooltip(c)">{{ cellTag(b, c, $index).text || row[c.name] }}</el-tag>
+                  :title="cellTooltip(c)">{{ cellTag(b, c, $index).text || cellText(c, row) }}</el-tag>
                 <a v-else-if="c.config && c.config.href" :href="cellHref(c, row)" target="_blank" class="cell-link"
-                  :title="cellTooltip(c)">{{ row[c.name] }}</a>
-                <span v-else :title="cellTooltip(c)">{{ row[c.name] }}</span>
+                  :title="cellTooltip(c)">{{ cellText(c, row) }}</a>
+                <span v-else :title="cellTooltip(c)">{{ cellText(c, row) }}</span>
               </template>
               <template v-if="c.config && c.config.tooltip" #header>
                 <span :title="c.config.tooltip">{{ c.header }} <el-icon class="hint-icon"><InfoFilled /></el-icon></span>

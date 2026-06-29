@@ -159,6 +159,7 @@ SQL → @filter → @date_line → @sort → @series(透视) → @flip(转置)
 |------|------|
 | `__auto__` | 第一列为 X 轴, 其余数值列为多条折线 |
 | `line:列1,列2` | 折线图, 指定数值列 (X 轴取第一列) |
+| `bar[x=列1/列2]:数值列…` | 显式指定 X 轴 (可多维, `/` 分隔); 多个维度列拼成类目 |
 | `bar:列1,列2` | 柱状图 |
 | `area:列1,列2` | 面积图 (填充折线) |
 | `scatter:x列,y列` | 散点图 (两个数值轴, 看相关性) |
@@ -174,13 +175,20 @@ SELECT channel, SUM(amount) AS total FROM sales GROUP BY channel;
 
 - `line`/`bar`/`area` 不写列名时默认：第一列作 X 轴、其余所有数值列作序列。
 - `__auto__` 也可写作 `auto`。
+- **多维 X 轴**：表格有多个维度列时 (如 `服务类型 + 处理方式`)，默认只取第一列作 X 轴会
+  和表格行对不上。用 `bar[x=服务类型/处理方式]:总数,成功数` 显式指定 (多维 `/` 分隔，前端把
+  几个维度拼成一个类目)。不写数值列时，序列默认取剩余非 X 列。对象式等价写法
+  `@chart={"type":"bar","x":["服务类型","处理方式"],"series":["总数"]}` (x 为数组即多维)。
+  若 X 轴出现重复值，报表会在表格上方提示 (重复会导致图表与表格对不上)。
 - 也支持对象写法 `@chart={"type":"bar","x":"day","series":["pv","uv"]}`。兼容键：
-  X 轴 `x`/`xAxis`; 序列 `series`/`y`/`yAxis`; 散点 y 轴 `y`; 饼图/漏斗分类 `name`/`category`、
-  数值 `value`; 仪表盘数值 `value`。
+  X 轴 `x`/`xAxis` (字符串=单维, 数组=多维); 序列 `series`/`y`/`yAxis`; 散点 y 轴 `y`;
+  饼图/漏斗分类 `name`/`category`、数值 `value`; 仪表盘数值 `value`。
 - **堆叠**：`bar`/`area` 对象式加 `"stack":true` 即堆叠 (如
   `@chart={"type":"bar","x":"day","series":["pv","uv"],"stack":true}`)。
 - 配合 `@invisible=true` 可只显示图表、隐藏表格主体。
-- 前端用 ECharts 渲染, 序列值会按数值解析 (非数值按 0 处理)。
+- 前端用 ECharts 渲染, 序列值按数值解析 (非数值按 0 处理)。
+- **图表用原始数值**：图表、排序、汇总都使用 SQL 查出的**原始数值**；列配置 `format`
+  (`money`/`integer`/`percent` 等) 只影响**表格单元格的展示**，不会改变图表/排序/汇总的计算值。
 
 ## 4.1 KPI 卡片 `@kpi`
 
@@ -548,14 +556,19 @@ ${ch|渠道||enum.multiple(web:网页,app:客户端,mini:小程序)}
 ${region|地区||enum_sql.multiple(SELECT id AS value, name AS label FROM regions)}
 ```
 
-多选时 `{name}` **展开为 SQL in-list** (`'web','app'`), 在 SQL 里配合 `IN` 使用:
+多选时 `{name}` **展开为 SQL in-list** (`'web','app'`), 在 SQL 里配合 `IN` 使用。
+**推荐写法** —— 用 `-- {?name}` 行条件让"未选 = 不过滤":
 
 ```sql
--- @row_tag 等照旧
-SELECT * FROM sales WHERE channel IN ({ch});
+SELECT * FROM sales WHERE 1=1
+  AND channel IN ({ch})   -- {?ch}
 ```
 
-- 未选时 `{ch}` 为 `''` (即 `IN ('')`, 不命中而非语法错), 可用 `-- {?ch}` 行控制整段是否生效。
+- **未选时整行被删除** (等价于不加这个过滤, 即全部命中); 有选时展开为 `channel IN ('web','app')`。
+  `{?name}` 对多选已能正确判空 (看真实选择而非 SQL 编码值), 无需再写
+  `'{ch_raw}' = '' OR channel IN ({ch})` 这类绕法。
+- 若**不**用 `-- {?ch}` 行条件而直接 `IN ({ch})`: 未选时 `{ch}` 为 `''` (即 `IN ('')`, 不命中而非
+  语法错) —— 这通常**不是**你想要的 (会过滤掉所有行), 故推荐上面的行条件写法。
 - 另提供 `{name_raw}` = 原始逗号串 (`web,app`), 供需要原值的场景。
 - 值里的单引号会被转义, 防止经宏拼接注入。
 - 脚本里用 `result.filter({name, type:'enum', multiple:true, options:[...]})`。
@@ -666,6 +679,10 @@ WHERE created_at >= '{month_start[Y-m-01]}'   -- 值 2026-06-25 → 2026-06-01 (
 当声明式注解不够用时 (动态拼 SQL、按参数分支、自定义列计算、按数据生成多个区块、
 外部 API 数据), 可写一段 **JavaScript** 动态产出报表。脚本区块用 `#!SCRIPT` 起、`#!END` 止,
 与普通 SQL/markdown 区块**并存**:
+
+> 脚本块内是纯 JS, **不受报表宏/过滤器解析影响** —— JS 模板字符串 `` `x ${value}` `` 里的
+> `${...}` 不会被当成报表过滤器, 对象字面量 `{...}` 也不会被当成宏。正常写 JS 即可。
+
 
 ```
 #!SCRIPT

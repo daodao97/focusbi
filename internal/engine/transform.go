@@ -28,9 +28,11 @@ func applyCellTransforms(cols []Column, rows []map[string]any) {
 		round, hasRound := intConfig(col.Config["round"])
 		dateFmt, hasDate := strConfig(col.Config["date"])
 		tsFmt, hasTime2str := strConfig(col.Config["time2str"])
-		format, hasFormat := strConfig(col.Config["format"])
-
-		if enumMap == nil && !hasRatio && !hasRound && !hasDate && !hasTime2str && !hasFormat {
+		// 注意: format (money/integer/percent 等纯数字显示格式) 不在此处理 —— 它只作用于
+		// 表格单元格展示, 由前端渲染时格式化。若在这里把 rows 改成 "14,112" 会污染图表/排序/
+		// 汇总共用的原始数值 (图表读到字符串 NaN)。enum/date/time2str/ratio/round 产出语义文本
+		// 或派生展示列, 作者不会拿去做图表数值, 故仍在后端就地改。
+		if enumMap == nil && !hasRatio && !hasRound && !hasDate && !hasTime2str {
 			continue
 		}
 		for _, row := range rows {
@@ -47,8 +49,6 @@ func applyCellTransforms(cols []Column, rows []map[string]any) {
 				row[col.Name] = formatDateCell(cast.ToString(v), dateFmt)
 			case hasTime2str:
 				row[col.Name] = time2str(v, tsFmt)
-			case hasFormat:
-				row[col.Name] = formatCellValue(v, format)
 			case hasRatio && ratio != 0:
 				row[col.Name] = formatFloat(cast.ToFloat64(v)/ratio*100, 2) + "%"
 			case hasRound:
@@ -233,57 +233,6 @@ func toFloat(v any) (float64, error) {
 	default:
 		return strconv.ParseFloat(cast.ToString(v), 64)
 	}
-}
-
-func formatCellValue(v any, format string) any {
-	f, err := toFloat(v)
-	if err != nil {
-		return v
-	}
-	switch strings.ToLower(strings.TrimSpace(format)) {
-	case "money", "currency":
-		return addThousands(formatFloat(f, 2))
-	case "number":
-		return addThousands(trimFloat(f))
-	case "integer", "int":
-		return addThousands(formatFloat(f, 0))
-	case "percent", "percentage":
-		return formatFloat(f*100, 2) + "%"
-	default:
-		return v
-	}
-}
-
-func addThousands(s string) string {
-	sign := ""
-	if strings.HasPrefix(s, "-") {
-		sign = "-"
-		s = strings.TrimPrefix(s, "-")
-	}
-	intPart, fracPart, hasFrac := strings.Cut(s, ".")
-	n := len(intPart)
-	if n <= 3 {
-		if hasFrac {
-			return sign + intPart + "." + fracPart
-		}
-		return sign + intPart
-	}
-	var b strings.Builder
-	b.WriteString(sign)
-	first := n % 3
-	if first == 0 {
-		first = 3
-	}
-	b.WriteString(intPart[:first])
-	for i := first; i < n; i += 3 {
-		b.WriteByte(',')
-		b.WriteString(intPart[i : i+3])
-	}
-	if hasFrac {
-		b.WriteByte('.')
-		b.WriteString(fracPart)
-	}
-	return b.String()
 }
 
 func formatFloat(f float64, prec int) string {
