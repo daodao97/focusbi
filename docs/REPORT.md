@@ -126,7 +126,7 @@ MySQL 数据源可通过 SSH 跳板机连接 (在数据源弹窗中开启「SSH 
   还包括块注解 `@dsn=` 覆盖、脚本 `query(sql,args,dsn)`、`enum_sql` 自定义源,
   无权的块以错误返回。作者无法借 `@dsn=other` 绕到无权的库。
 - 资源键用**数据源 id** (与 `report.{id}` 一致), 不受数据源**改名**影响。
-- **例外 (不强制)**: 公开分享页 (作者已主动公开) 与订阅推送 (系统定时任务) 按预授权执行。
+- **例外 (不强制)**: 公开分享页 (作者已主动公开) 与定时任务 (系统调度) 按预授权执行。
 - 升级兼容: 旧角色若"能读报表但没配过任何 dsn 权限", 启动时自动回填 `dsn:r` (保持
   可用所有源), 之后管理员可在「角色管理 → 按数据源」逐个收紧。
 
@@ -175,25 +175,25 @@ MySQL 数据源可通过 SSH 跳板机连接 (在数据源弹窗中开启「SSH 
 - 公开页 (`view.html`) 走 `/api/public/report/:token[/run]`, 与登录鉴权完全解耦,
   访客可调过滤器重新查询。仅 `is_public=1` 的报表能被令牌取到。
 
-## 订阅推送 (定时 / 告警)
+## 定时任务 (定时 / 告警)
 
-报表可配置**定时订阅**: 到点自动跑报表, 把结果推送到群机器人 (飞书 / 企业微信)。
-入口在报表编辑器「报表设置 → 订阅推送」, 数据存于 `report_subscription` 表,
-REST 接口在 `/api/report/:id/subscription`(需 `report.manage:rw`)。
+报表可配置**定时任务**: 到点自动跑报表, 把结果推送到群机器人 (飞书 / 企业微信)。
+入口在报表编辑器「报表设置 → 定时任务」, 数据存于 `report_schedule` 表,
+REST 接口在 `/api/report/:id/schedule`(需 `report.manage:rw`)。
 
-**调度**: `job/job.go` 注册了一个 xcron 任务 `ReportSubscriptionTick`, 每分钟第 0 秒
-触发 `subscription.Tick`(开启 `EnableDistLock`, 多实例只跑一次)。Tick 扫描所有
-启用订阅, 对 cron 到期的逐条执行。每条订阅在执行前还会**原子抢占本分钟执行权**
-(`ClaimSubscriptionRun`), 杜绝重入 / 多实例重复推送。
+**调度**: `job/job.go` 注册了一个 xcron 任务 `ReportScheduleTick`, 每分钟第 0 秒
+触发 `schedule.Tick`(开启 `EnableDistLock`, 多实例只跑一次)。Tick 扫描所有
+启用任务, 对 cron 到期的逐条执行。每条任务在执行前还会**原子抢占本分钟执行权**
+(`ClaimScheduleRun`), 杜绝重入 / 多实例重复推送。
 
-**一条订阅的字段** (`SubscriptionRecord`, 见 `dao/subscription.go`):
+**一条任务的字段** (`ScheduleRecord`, 见 `dao/schedule.go`):
 
 | 字段 | 说明 |
 |------|------|
 | `cron` | 标准 **5 段** cron (分 时 日 月 周, 不含秒) |
 | `channel` | `lark`(飞书)/ `wework`(企业微信) |
 | `webhook` | 群机器人完整 webhook 地址 |
-| `params` | 固定过滤参数 JSON, 决定这条订阅跑哪份数据 |
+| `params` | 固定过滤参数 JSON, 决定这条任务跑哪份数据 |
 | `condition` | 阈值告警条件; 空 = 无条件定时推送 |
 | `enabled` | 是否启用 |
 | `last_run_at` / `last_status` | 上次触发的整分钟 / 执行结果 (ok 或错误信息) |
@@ -202,16 +202,16 @@ REST 接口在 `/api/report/:id/subscription`(需 `report.manage:rw`)。
 
 - **定时推送** (`condition` 为空): 到点即推送报表摘要。
 - **阈值告警** (`condition` 非空): 对目标区块某列按聚合方式取值, 与阈值比较,
-  **命中才推送**, 正文带 `⚠️ 告警:` 前缀。条件结构 `SubCondition`:
+  **命中才推送**, 正文带 `⚠️ 告警:` 前缀。条件结构 `ScheduleCondition`:
   - `block` 目标区块 `Block.ID`(空=首个表格区块)、`column` 目标列、
     `agg` 聚合方式 (`any`/`first`/`sum`/`max`/`min`/`count`)、`op` 比较符
     (`=` `!=` `>` `>=` `<` `<=`)、`value` 阈值。
 
 **报表内嵌波动** (`@data_fluctuations`, 见 SYNTAX.md §5.6): 报表执行时产出的波动
-消息会汇总到 `Result.Messages`, 订阅推送时作为 `⚠️ 波动:` 前缀并入正文 —— 与上面的
-订阅级 `condition` 告警相互独立, 可叠加。
+消息会汇总到 `Result.Messages`, 定时任务时作为 `⚠️ 波动:` 前缀并入正文 —— 与上面的
+任务级 `condition` 告警相互独立, 可叠加。
 
-执行链路: `Execute`(`internal/subscription/runner.go`)取报表 → 跑引擎 →(判定条件)
+执行链路: `Execute`(`internal/schedule/runner.go`)取报表 → 跑引擎 →(判定条件)
 → `RenderText` 渲染为纯文本摘要 (限长: 区块/行/列/单元格均有上限) → `push` 按渠道
 组装消息体发出。消息可附报表查看链接 (站点地址 `site.url` 已配置时)。
 

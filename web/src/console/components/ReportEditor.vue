@@ -12,7 +12,7 @@ import SqlEditor from '@/components/SqlEditor.vue'
 import ReportFilters from '@/components/ReportFilters.vue'
 import ReportBlocks from '@/components/ReportBlocks.vue'
 import DocDrawer from '@/components/DocDrawer.vue'
-import SubscriptionPanel from './SubscriptionPanel.vue'
+import SchedulePanel from './SchedulePanel.vue'
 import VersionDrawer from './VersionDrawer.vue'
 import { Reading, Setting } from '@element-plus/icons-vue'
 
@@ -273,7 +273,7 @@ defineExpose({ save, reload: load })
       <ReportBlocks v-if="preview" :blocks="preview.blocks" />
     </div>
 
-    <!-- 报表设置: 承载 report.settings 的页面级配置 + 订阅推送 -->
+    <!-- 报表设置: 承载 report.settings 的页面级配置 + 定时任务 -->
     <el-dialog v-model="settingsOpen" title="报表设置" width="720px" append-to-body>
       <el-tabs v-model="settingsTab">
         <el-tab-pane label="常规" name="general">
@@ -291,11 +291,11 @@ defineExpose({ save, reload: load })
             </el-form-item>
           </el-form>
         </el-tab-pane>
-        <el-tab-pane label="订阅推送" name="subscription">
-          <SubscriptionPanel v-if="report.id" :report-id="report.id" :filters="preview?.filters || []"
+        <el-tab-pane label="定时任务" name="schedule">
+          <SchedulePanel v-if="report.id" :report-id="report.id" :filters="preview?.filters || []"
             :content="report.content" :dsn="report.dsn" />
           <el-alert v-else type="info" :closable="false"
-            title="请先保存报表后再配置订阅推送" />
+            title="请先保存报表后再配置定时任务" />
         </el-tab-pane>
       </el-tabs>
       <template #footer>

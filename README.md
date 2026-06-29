@@ -72,7 +72,7 @@ agent 的 system prompt、和 `get_syntax_doc` 返回的内容, 一处维护。
 - 草稿 / 发布版分离, 版本历史和回滚——agent 改草稿, 你审了再发。
 - RBAC: 数据源、报表、目录三级权限, agent 与人共用同一套。
 - 公开分享: 不可枚举令牌, 随时关闭。
-- 订阅推送: cron 定时跑, 推飞书 / 企业微信, 支持阈值触发的异常提醒。
+- 定时任务: cron 定时跑, 推飞书 / 企业微信, 支持阈值触发的异常提醒。
 
 ## 本地开发
 
@@ -102,7 +102,7 @@ open http://127.0.0.1:8099
 ## 部署方式
 
 FocusBI 是一个单二进制应用, 运行时依赖一个 MySQL 主库和 Redis。MySQL 用来保存系统数据
-(用户、报表、版本、数据源配置等), Redis 用于缓存和订阅调度锁。
+(用户、报表、版本、数据源配置等), Redis 用于缓存和任务调度锁。
 
 推荐只使用安装脚本部署:
 
@@ -159,7 +159,7 @@ make build      # 生产构建单二进制 -> build/server (内嵌前端)
 go test ./...                       # 全部 Go 测试
 go test ./internal/engine/          # 报表引擎 (核心逻辑所在)
 
-ENABLE_CRON=true go run ./cmd --app-env dev   # 启用定时订阅调度
+ENABLE_CRON=true go run ./cmd --app-env dev   # 启用定时任务调度
 ```
 
 ## MCP 安装 
@@ -224,9 +224,9 @@ bearer_token_env_var = "FOCUSBI_TOKEN"
 - `site` —— 站点 / 服务级配置:
   - `site.jwt_secret` —— **必填**, 登录 token 的签名密钥。为空或仍是默认占位值时**拒绝
     启动** (否则任何人都能伪造 token)。用 `openssl rand -hex 32` 生成一个。
-  - `site.url` —— 站点对外地址, 用于订阅推送里拼报表链接。
+  - `site.url` —— 站点对外地址, 用于定时任务里拼报表链接。
 - `database` —— 主库 (`default`, MySQL) 与连接串。
-- `redis` —— 缓存 / 分布式锁 (订阅调度多实例去重需要)。
+- `redis` —— 缓存 / 分布式锁 (任务调度多实例去重需要)。
 - `engine.query_timeout` —— 单次 SQL 查询超时, 默认 `3m`, 支持 `30s` / `3m` 这类 Go duration。
 - `ai` —— AI provider (`claude` / `openai`)、`base_url`、`api_key`、`model`。
 - `turnstile` —— 登录人机验证 (Cloudflare Turnstile)。

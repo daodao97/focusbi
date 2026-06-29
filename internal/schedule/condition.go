@@ -1,4 +1,4 @@
-package subscription
+package schedule
 
 import (
 	"fmt"
@@ -13,11 +13,11 @@ import (
 )
 
 // 阈值告警条件判定: 对目标区块某列按聚合方式取值, 与阈值比较, 命中才推送。
-// 条件来自 dao.SubCondition (列 + 聚合 + 操作符 + 值)。
+// 条件来自 dao.ScheduleCondition (列 + 聚合 + 操作符 + 值)。
 
 // evalCondition 判定条件是否命中。返回 (是否命中, 实际值的人类可读描述)。
 // 条件为 nil 视为无条件 (命中, 描述为空) —— 即定时推送。
-func evalCondition(cond *dao.SubCondition, r *engine.Result) (bool, string) {
+func evalCondition(cond *dao.ScheduleCondition, r *engine.Result) (bool, string) {
 	if cond == nil || strings.TrimSpace(cond.Column) == "" {
 		return true, ""
 	}

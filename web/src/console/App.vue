@@ -51,7 +51,7 @@ async function loadMe() {
 }
 
 const isAdmin = computed(() => perm.isAdmin)
-const canManageSub = computed(() => canManageReports())
+const canManageSchedule = computed(() => canManageReports())
 const userName = computed(() => perm.user?.nick || perm.user?.username || '')
 
 // 折叠态显示的顶层导航 (图标 + 跳转)
@@ -61,8 +61,8 @@ const navItems = computed(() => {
     { path: '/dsn', label: '数据源', icon: Coin },
     { path: '/tokens', label: 'MCP 令牌', icon: Key }
   ]
-  if (canManageSub.value) {
-    items.push({ path: '/subscriptions', label: '订阅管理', icon: Bell })
+  if (canManageSchedule.value) {
+    items.push({ path: '/schedules', label: '任务管理', icon: Bell })
   }
   if (isAdmin.value) {
     items.push({ path: '/users', label: '用户管理', icon: User })
@@ -80,7 +80,7 @@ function navActive(path) {
 // 当前选中项高亮
 const active = computed(() => {
   if (route.path.startsWith('/dsn')) return '/dsn'
-  if (route.path.startsWith('/subscriptions')) return '/subscriptions'
+  if (route.path.startsWith('/schedules')) return '/schedules'
   if (route.path.startsWith('/users')) return '/users'
   if (route.path.startsWith('/roles')) return '/roles'
   if ((route.name === 'report-view' || route.name === 'report-edit') && route.params.id) {
@@ -153,7 +153,7 @@ onMounted(() => { loadReports(); loadMe() })
         <el-menu-item index="/reports"><el-icon><Document /></el-icon><span>全部报表</span></el-menu-item>
         <el-menu-item index="/dsn"><el-icon><Coin /></el-icon><span>数据源</span></el-menu-item>
         <el-menu-item index="/tokens"><el-icon><Key /></el-icon><span>MCP 令牌</span></el-menu-item>
-        <el-menu-item v-if="canManageSub" index="/subscriptions"><el-icon><Bell /></el-icon><span>订阅管理</span></el-menu-item>
+        <el-menu-item v-if="canManageSchedule" index="/schedules"><el-icon><Bell /></el-icon><span>任务管理</span></el-menu-item>
         <template v-if="isAdmin">
           <el-menu-item index="/users"><el-icon><User /></el-icon><span>用户管理</span></el-menu-item>
           <el-menu-item index="/roles"><el-icon><Setting /></el-icon><span>角色管理</span></el-menu-item>

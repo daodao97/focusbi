@@ -119,7 +119,7 @@ func TestReportURLFromSiteConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create report: %v", err)
 	}
-	wantView := "https://bi.example.com/index.html#/reports/" + strconv.Itoa(created.ID)
+	wantView := "https://bi.example.com/#/reports/" + strconv.Itoa(created.ID)
 	if created.URL != wantView {
 		t.Errorf("create url = %q, want %q", created.URL, wantView)
 	}

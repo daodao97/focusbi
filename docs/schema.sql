@@ -31,7 +31,7 @@ CREATE TABLE IF NOT EXISTS `report` (
     `type`        VARCHAR(16)  NOT NULL DEFAULT 'report' COMMENT 'report 报表 / folder 文件夹',
     `sort`        INT          NOT NULL DEFAULT 0 COMMENT '同级排序',
     `dsn`         VARCHAR(64)  NOT NULL DEFAULT 'default' COMMENT '默认数据源',
-    `content`     MEDIUMTEXT   NULL COMMENT '发布版内容 (查看者/run/订阅看的); 文件夹为空',
+    `content`     MEDIUMTEXT   NULL COMMENT '发布版内容 (查看者/run/定时任务看的); 文件夹为空',
     `dev_content` MEDIUMTEXT   NULL COMMENT '开发版草稿; 发布后同步到 content',
     `settings`    TEXT         NULL COMMENT '页面级配置 JSON',
     `remark`      VARCHAR(255) NOT NULL DEFAULT '',
@@ -43,16 +43,16 @@ CREATE TABLE IF NOT EXISTS `report` (
     KEY `idx_share_token` (`share_token`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='报表模板';
 
--- 报表定时订阅: 到点跑报表并把结果推送到飞书/企业微信群机器人
-CREATE TABLE IF NOT EXISTS `report_subscription` (
+-- 报表定时任务: 到点跑报表并把结果推送到飞书/企业微信群机器人
+CREATE TABLE IF NOT EXISTS `report_schedule` (
     `id`          INT UNSIGNED NOT NULL AUTO_INCREMENT,
     `report_id`   INT UNSIGNED NOT NULL COMMENT '所属报表 id',
-    `name`        VARCHAR(128) NOT NULL DEFAULT '' COMMENT '订阅名称',
+    `name`        VARCHAR(128) NOT NULL DEFAULT '' COMMENT '任务名称',
     `cron`        VARCHAR(64)  NOT NULL COMMENT 'cron 表达式 (标准 5 段, 不含秒)',
     `channel`     VARCHAR(16)  NOT NULL DEFAULT 'lark' COMMENT '渠道: lark 飞书 / wework 企业微信',
     `webhook`     VARCHAR(512) NOT NULL DEFAULT '' COMMENT '群机器人 webhook 完整地址',
     `params`      TEXT         NULL COMMENT '固定过滤参数 JSON',
-    `condition`   TEXT         NULL COMMENT '触发条件 JSON; 空=定时推送, 非空=命中才推',
+    `trigger_cond` TEXT        NULL COMMENT '触发条件 JSON; 空=定时推送, 非空=命中才推',
     `enabled`     TINYINT(1)   NOT NULL DEFAULT 1 COMMENT '是否启用',
     `last_run_at` DATETIME     NULL COMMENT '上次触发的整分钟',
     `last_status` VARCHAR(255) NOT NULL DEFAULT '' COMMENT '上次执行结果',
@@ -61,7 +61,7 @@ CREATE TABLE IF NOT EXISTS `report_subscription` (
     PRIMARY KEY (`id`),
     KEY `idx_report` (`report_id`),
     KEY `idx_enabled` (`enabled`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='报表定时订阅推送';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='报表定时任务推送';
 
 -- 报表发布版本历史: 每次发布记一条 content 快照, 可回滚 (每报表保留最近 N 条)
 CREATE TABLE IF NOT EXISTS `report_version` (

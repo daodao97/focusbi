@@ -1,4 +1,4 @@
-package subscription
+package schedule
 
 import "testing"
 
@@ -24,6 +24,25 @@ func TestValidateWebhook(t *testing.T) {
 		err := ValidateWebhook(c.url)
 		if (err == nil) != c.ok {
 			t.Errorf("%s: ValidateWebhook(%q) err=%v, want ok=%v", c.name, c.url, err, c.ok)
+		}
+	}
+}
+
+func TestResolveChannel(t *testing.T) {
+	cases := []struct {
+		channel, webhook, want string
+	}{
+		// 企微地址即便 channel 选了 lark, 也纠正为企微 (本 bug)
+		{"lark", "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=x", ChannelWework},
+		{"", "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=x", ChannelWework},
+		{"wework", "https://open.feishu.cn/open-apis/bot/v2/hook/abc", ChannelLark},
+		{"lark", "https://open.larksuite.com/open-apis/bot/v2/hook/abc", ChannelLark},
+		// host 无法识别时按传入 channel
+		{"wework", "https://example.com/hook", "wework"},
+	}
+	for _, c := range cases {
+		if got := resolveChannel(c.channel, c.webhook); got != c.want {
+			t.Errorf("resolveChannel(%q,%q)=%q, want %q", c.channel, c.webhook, got, c.want)
 		}
 	}
 }

@@ -201,7 +201,7 @@ func registerTools(s *mcp.Server) {
 		updateReportTool)
 
 	mcp.AddTool(s, &mcp.Tool{Name: "publish_report",
-		Description: "把开发版草稿发布为正式版 (查看者与订阅推送据此); 同时记录一个版本快照。需 report.manage 写权限。"},
+		Description: "把开发版草稿发布为正式版 (查看者与定时任务据此); 同时记录一个版本快照。需 report.manage 写权限。"},
 		publishReportTool)
 }
 
@@ -443,14 +443,14 @@ func publishReportTool(ctx context.Context, _ *mcp.CallToolRequest, in publishIn
 }
 
 // reportURL 构造报表在控制台的查看链接, 方便在 AI 工具里直接点开。
-// MCP 调用者是已登录的开发者 (有后台权限), 故统一指向控制台查看页 (index.html#/reports/<id>),
+// MCP 调用者是已登录的开发者 (有后台权限), 故统一指向控制台查看页 (/#/reports/<id>),
 // 而非公开分享页。folder 或站点地址未配置时返回空。
 func reportURL(r *dao.ReportRecord) string {
 	base := conf.Get().SiteBaseURL()
 	if base == "" || r.Type == "folder" {
 		return ""
 	}
-	return fmt.Sprintf("%s/index.html#/reports/%d", base, r.Id)
+	return fmt.Sprintf("%s/#/reports/%d", base, r.Id)
 }
 
 // reportEditURL 构造报表的控制台编辑链接 (AI 改完模板可直接点开继续编辑/预览)。

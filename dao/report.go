@@ -18,7 +18,7 @@ type ReportRecord struct {
 	Type       string    `json:"type"`      // report / folder
 	Sort       int       `json:"sort"`      // 同级排序
 	DSN        string    `json:"dsn"`
-	Content    string    `json:"content"`     // 发布版 (查看者/run/订阅看的)
+	Content    string    `json:"content"`     // 发布版 (查看者/run/定时任务看的)
 	DevContent string    `json:"dev_content"` // 开发版草稿 (编辑器编辑的); 发布同步到 content
 	Settings   string    `json:"settings"`
 	Remark     string    `json:"remark"`

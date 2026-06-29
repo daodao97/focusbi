@@ -20,7 +20,7 @@ go test ./internal/engine/ -run TestRunJoin -v  # a single test
 gofmt -w <file>                                 # format before committing; CI-style check: gofmt -l <dir>
 ```
 
-- Cron/subscription scheduler only runs when `ENABLE_CRON=true` (see `cmd/main.go`).
+- Cron/schedule scheduler only runs when `ENABLE_CRON=true` (see `cmd/main.go`).
 - Frontend uses **pnpm** (not npm). Building requires `pnpm install` (handled by `make web`).
 - The `default` database (`conf.database[default]`) must be **MySQL** — migrations auto-run via goose on startup and only support MySQL (`dao/dao.go:initSchema`). Report *data sources* (the `dsn` table) additionally support PostgreSQL and SQLite.
 - Demo data: `mysql ... < docs/schema.sql` (sales tables + a sample report).
@@ -41,7 +41,7 @@ gofmt -w <file>                                 # format before committing; CI-s
 
 **AI (`internal/ai/`)**: conversational template editing via **Eino** (`cloudwego/eino`) unified ChatModel — providers `claude` (default) and `openai`. Config is read **only from `conf.ai`** (no env-var override). The model first streams a one-line explanation, then calls a `propose_template_patch` tool returning SEARCH/REPLACE blocks (`diff.go`), with full-template rewrite as fallback. `docs/SYNTAX.md` is embedded as the system prompt. Note: the shared HTTP client rewrites `User-Agent` to `focusbi/1.0` because the anthropic-sdk-go default UA gets 403'd by some Cloudflare-fronted gateways.
 
-**Subscriptions (`internal/subscription/` + `job/`)**: `job.NewCronServer` registers a per-minute xcron tick (distributed-locked). `Tick` scans enabled subscriptions, atomically claims each due one (`ClaimSubscriptionRun`, prevents multi-instance dupes), runs the report, and pushes to lark/wework webhooks. Two modes: unconditional scheduled push, or threshold alarm (`SubCondition`). `@data_fluctuations` messages on the report surface in `Result.Messages` and are folded into the push body.
+**Scheduled tasks (`internal/schedule/` + `job/`)**: a "schedule" is essentially a cron job (run a report on a cron, then act on the result — pushing to a webhook is its main action today). `job.NewCronServer` registers a per-minute xcron tick (distributed-locked). `Tick` scans enabled schedules, atomically claims each due one (`ClaimScheduleRun`, prevents multi-instance dupes), runs the report, and pushes to lark/wework webhooks. Two modes: unconditional scheduled push, or threshold alarm (`ScheduleCondition`). `@data_fluctuations` messages on the report surface in `Result.Messages` and are folded into the push body. (DB table `report_schedule`, DAO `dao.ScheduleRecord`.)
 
 **MCP server (`internal/mcpserver/` + `api/mcp.go`)**: exposes report-development tools to AI clients (Codex/Claude Code) over `/mcp` (Streamable HTTP, official `modelcontextprotocol/go-sdk`). Auth is the security-critical part: the SDK's `RequireBearerToken` middleware verifies a Bearer token via `VerifyToken` (an `fbt_`-prefixed API token from the `api_token` table, or a login JWT), puts the user id in the request context, and `principalFromContext` loads the user + compiles `auth.NewPermission`. **Every tool gates on the caller's RBAC** (same `report.manage`/`dsn` resources as REST) — tools never bypass permissions. Report-readability logic is shared with `api/` via `auth.ReportReadable`/`LoadReportParents`. API tokens store only a SHA-256 hash; plaintext is shown once at creation.
 

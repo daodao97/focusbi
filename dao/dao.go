@@ -29,7 +29,7 @@ func Init() error {
 	ProjectUser = xdb.New("project_user", xdb.WithCacheKey("id"))
 	Dsn = xdb.New("dsn")
 	Report = xdb.New("report")
-	Subscription = xdb.New("report_subscription")
+	Schedule = xdb.New("report_schedule")
 	ReportVersion = xdb.New("report_version")
 	User = xdb.New("user")
 	Role = xdb.New("role")

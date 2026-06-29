@@ -1,4 +1,4 @@
-package subscription
+package schedule
 
 import (
 	"testing"
@@ -31,7 +31,7 @@ func TestEvalConditionNil(t *testing.T) {
 
 func TestEvalConditionAny(t *testing.T) {
 	// 任一行 gmv < 10000 → 命中 (web=8000)
-	c := &dao.SubCondition{Column: "gmv", Agg: "any", Op: "<", Value: "10000"}
+	c := &dao.ScheduleCondition{Column: "gmv", Agg: "any", Op: "<", Value: "10000"}
 	hit, detail := evalCondition(c, sampleResult())
 	if !hit {
 		t.Fatalf("应命中, detail=%s", detail)
@@ -40,7 +40,7 @@ func TestEvalConditionAny(t *testing.T) {
 
 func TestEvalConditionAnyNoHit(t *testing.T) {
 	// 任一行 gmv < 5000 → 不命中
-	c := &dao.SubCondition{Column: "gmv", Agg: "any", Op: "<", Value: "5000"}
+	c := &dao.ScheduleCondition{Column: "gmv", Agg: "any", Op: "<", Value: "5000"}
 	hit, _ := evalCondition(c, sampleResult())
 	if hit {
 		t.Error("不应命中")
@@ -49,7 +49,7 @@ func TestEvalConditionAnyNoHit(t *testing.T) {
 
 func TestEvalConditionSum(t *testing.T) {
 	// sum(gmv)=20000 >= 15000 → 命中
-	c := &dao.SubCondition{Column: "gmv", Agg: "sum", Op: ">=", Value: "15000"}
+	c := &dao.ScheduleCondition{Column: "gmv", Agg: "sum", Op: ">=", Value: "15000"}
 	hit, detail := evalCondition(c, sampleResult())
 	if !hit {
 		t.Fatalf("sum 应命中, detail=%s", detail)
@@ -69,7 +69,7 @@ func TestEvalConditionMaxMinFirstCount(t *testing.T) {
 		{"count", ">", "5", false},
 	}
 	for _, c := range cases {
-		cond := &dao.SubCondition{Column: "gmv", Agg: c.agg, Op: c.op, Value: c.val}
+		cond := &dao.ScheduleCondition{Column: "gmv", Agg: c.agg, Op: c.op, Value: c.val}
 		hit, detail := evalCondition(cond, r)
 		if hit != c.want {
 			t.Errorf("%s %s %s = %v, want %v (%s)", c.agg, c.op, c.val, hit, c.want, detail)
@@ -78,7 +78,7 @@ func TestEvalConditionMaxMinFirstCount(t *testing.T) {
 }
 
 func TestEvalConditionMissingBlock(t *testing.T) {
-	c := &dao.SubCondition{Block: "nope", Column: "gmv", Agg: "any", Op: "<", Value: "1"}
+	c := &dao.ScheduleCondition{Block: "nope", Column: "gmv", Agg: "any", Op: "<", Value: "1"}
 	hit, _ := evalCondition(c, sampleResult())
 	if hit {
 		t.Error("区块不存在不应命中")

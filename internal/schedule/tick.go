@@ -1,4 +1,4 @@
-package subscription
+package schedule
 
 import (
 	"errors"
@@ -16,13 +16,13 @@ var nowFunc = time.Now
 // 5 段标准 cron 解析器 (分 时 日 月 周, 不含秒)。
 var cronParser = cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow)
 
-// Tick 每分钟调度一次: 扫描所有启用订阅, 到期的执行并推送。
+// Tick 每分钟调度一次: 扫描所有启用定时任务, 到期的执行并推送。
 // 由 job 注册到 xcron (每分钟触发, 带分布式锁)。
 func Tick() {
 	minute := nowFunc().Truncate(time.Minute)
-	subs, err := dao.ListEnabledSubscriptions()
+	subs, err := dao.ListEnabledSchedules()
 	if err != nil {
-		xlog.Error("subscription tick: list failed", xlog.String("err", err.Error()))
+		xlog.Error("schedule tick: list failed", xlog.String("err", err.Error()))
 		return
 	}
 	for _, sub := range subs {
@@ -30,9 +30,9 @@ func Tick() {
 			continue
 		}
 		// 原子抢占本分钟执行权: 仅抢到的实例执行, 杜绝多实例/重入重复推送。
-		claimed, err := dao.ClaimSubscriptionRun(sub.Id, minute)
+		claimed, err := dao.ClaimScheduleRun(sub.Id, minute)
 		if err != nil {
-			xlog.Error("subscription claim failed", xlog.Int("id", sub.Id), xlog.String("err", err.Error()))
+			xlog.Error("schedule claim failed", xlog.Int("id", sub.Id), xlog.String("err", err.Error()))
 			continue
 		}
 		if !claimed {
@@ -42,19 +42,19 @@ func Tick() {
 	}
 }
 
-// runOne 执行单条订阅并记录结果, 失败不影响其他订阅。执行权已在调用前抢占。
-func runOne(sub *dao.SubscriptionRecord) {
+// runOne 执行单条定时任务并记录结果, 失败不影响其他定时任务。执行权已在调用前抢占。
+func runOne(sub *dao.ScheduleRecord) {
 	status := "ok"
 	if err := Execute(sub); err != nil {
 		status = err.Error()
 		// 条件未命中是正常跳过, 不算错误。
 		if !errors.Is(err, ErrNotTriggered) {
-			xlog.Error("subscription execute failed",
+			xlog.Error("schedule execute failed",
 				xlog.Int("id", sub.Id), xlog.String("err", status))
 		}
 	}
-	if err := dao.FinishSubscriptionRun(sub.Id, status); err != nil {
-		xlog.Error("subscription finish failed", xlog.Int("id", sub.Id), xlog.String("err", err.Error()))
+	if err := dao.FinishScheduleRun(sub.Id, status); err != nil {
+		xlog.Error("schedule finish failed", xlog.Int("id", sub.Id), xlog.String("err", err.Error()))
 	}
 }
 

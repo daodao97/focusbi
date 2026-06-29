@@ -88,15 +88,15 @@ func Setup(e *gin.Engine) {
 		// 拖拽排序/移动: 批量更新 parent_id + sort
 		authed.POST("/report/reorder", auth.Require(resReportManage, "rw"), reorderReports)
 
-		// 报表定时订阅 (飞书/企微推送): 需 report.manage:rw
-		// 全局订阅管理页列表 (静态段, 须排在 /report/:id 相关路由前)
-		authed.GET("/report/subscriptions", auth.Require(resReportManage, "rw"), listAllSubscriptions)
-		authed.GET("/report/:id/subscription", auth.Require(resReportManage, "rw"), listSubscriptions)
-		authed.POST("/report/:id/subscription", auth.Require(resReportManage, "rw"), createSubscription)
-		authed.GET("/report/:id/subscription/:sid", auth.Require(resReportManage, "rw"), getSubscription)
-		authed.PUT("/report/:id/subscription/:sid", auth.Require(resReportManage, "rw"), updateSubscription)
-		authed.DELETE("/report/:id/subscription/:sid", auth.Require(resReportManage, "rw"), deleteSubscription)
-		authed.POST("/report/:id/subscription/:sid/test", auth.Require(resReportManage, "rw"), testSubscription)
+		// 报表定时任务 (飞书/企微推送): 需 report.manage:rw
+		// 全局任务管理页列表 (静态段, 须排在 /report/:id 相关路由前)
+		authed.GET("/report/schedules", auth.Require(resReportManage, "rw"), listAllSchedules)
+		authed.GET("/report/:id/schedule", auth.Require(resReportManage, "rw"), listSchedules)
+		authed.POST("/report/:id/schedule", auth.Require(resReportManage, "rw"), createSchedule)
+		authed.GET("/report/:id/schedule/:sid", auth.Require(resReportManage, "rw"), getSchedule)
+		authed.PUT("/report/:id/schedule/:sid", auth.Require(resReportManage, "rw"), updateSchedule)
+		authed.DELETE("/report/:id/schedule/:sid", auth.Require(resReportManage, "rw"), deleteSchedule)
+		authed.POST("/report/:id/schedule/:sid/test", auth.Require(resReportManage, "rw"), testSchedule)
 
 		// 用户 / 角色管理: 仅管理员
 		admin := authed.Group("", auth.RequireAdmin())

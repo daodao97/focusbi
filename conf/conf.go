@@ -34,7 +34,7 @@ type TurnstileConf struct {
 
 // SiteConf 是站点 / 服务级配置。
 type SiteConf struct {
-	// URL 站点对外可访问地址 (如 https://bi.example.com), 用于订阅推送里拼报表查看链接。
+	// URL 站点对外可访问地址 (如 https://bi.example.com), 用于定时任务里拼报表查看链接。
 	// 留空时推送消息不带链接。
 	URL string `json:"url" yaml:"url" env:"URL"`
 	// JWTSecret 登录 token 的签名密钥 (必填)。为空或默认占位值时拒绝启动 (见 Init)。

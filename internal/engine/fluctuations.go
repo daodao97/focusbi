@@ -11,7 +11,7 @@ import (
 // 数据波动检测 (移植自 dataddy plugin_data_fluctuations):
 // 对时序表按第一列 (通常是日期) 降序取最近两期, 对配置字段算环比波动,
 // 绝对值超过 threshold_percent 的字段汇总成一条波动消息, 写入 block.Messages。
-// 这些消息随后由订阅链路读取并推送 (见 internal/subscription)。
+// 这些消息随后由定时任务链路读取并推送 (见 internal/schedule)。
 //
 //	-- @data_fluctuations={"field":["consume","orders"],"threshold_percent":50}
 //	-- @data_fluctuations={"field":"consume"}            // threshold 缺省 50

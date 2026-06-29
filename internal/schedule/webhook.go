@@ -1,4 +1,4 @@
-package subscription
+package schedule
 
 import (
 	"fmt"
@@ -8,7 +8,7 @@ import (
 )
 
 // webhook 地址校验 (防 SSRF):
-// 订阅 webhook 由用户填写, 服务端会主动 POST 它, 因此必须限制目标, 防止被用于
+// 定时任务 webhook 由用户填写, 服务端会主动 POST 它, 因此必须限制目标, 防止被用于
 // 探测内网 / 云元数据 / 环回服务。本期只支持飞书 / 企业微信, 采用"已知域名后缀白名单"
 // 为主、内网 IP 黑名单兜底的策略。
 

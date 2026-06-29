@@ -145,14 +145,14 @@ export const api = {
   // 分享 (管理端开关)
   setShare: (id, enable) => request('POST', `/report/${id}/share`, { enable }),
 
-  // 定时订阅推送 (飞书/企微)
-  listAllSubscriptions: () => request('GET', '/report/subscriptions'),
-  listSubscriptions: (rid) => request('GET', `/report/${rid}/subscription`),
-  getSubscription: (rid, sid) => request('GET', `/report/${rid}/subscription/${sid}`),
-  createSubscription: (rid, s) => request('POST', `/report/${rid}/subscription`, s),
-  updateSubscription: (rid, sid, s) => request('PUT', `/report/${rid}/subscription/${sid}`, s),
-  deleteSubscription: (rid, sid) => request('DELETE', `/report/${rid}/subscription/${sid}`),
-  testSubscription: (rid, sid) => request('POST', `/report/${rid}/subscription/${sid}/test`),
+  // 定时任务推送 (飞书/企微)
+  listAllSchedules: () => request('GET', '/report/schedules'),
+  listSchedules: (rid) => request('GET', `/report/${rid}/schedule`),
+  getSchedule: (rid, sid) => request('GET', `/report/${rid}/schedule/${sid}`),
+  createSchedule: (rid, s) => request('POST', `/report/${rid}/schedule`, s),
+  updateSchedule: (rid, sid, s) => request('PUT', `/report/${rid}/schedule/${sid}`, s),
+  deleteSchedule: (rid, sid) => request('DELETE', `/report/${rid}/schedule/${sid}`),
+  testSchedule: (rid, sid) => request('POST', `/report/${rid}/schedule/${sid}/test`),
 
   // API Token (供 MCP 等程序化访问; 明文仅创建时返回一次)
   listApiTokens: () => request('GET', '/token'),

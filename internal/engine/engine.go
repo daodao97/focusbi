@@ -37,7 +37,7 @@ type Runner struct {
 	defaultDSN string
 	noCache    bool // 旁路查询缓存 (前端传 _nocache 时置位)
 	// authz 在执行触达某数据源前校验调用者权限 (按实际 dsn 名)。
-	// nil 表示不校验 (公开分享 / 订阅推送等已预授权的入口)。
+	// nil 表示不校验 (公开分享 / 定时任务等已预授权的入口)。
 	authz func(dsn string) error
 	// concurrency 独立 SQL 区块的并发预取数。<=0 时 Run 取 conf 默认值。
 	concurrency int

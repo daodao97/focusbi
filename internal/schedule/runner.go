@@ -1,4 +1,4 @@
-package subscription
+package schedule
 
 import (
 	"errors"
@@ -10,14 +10,14 @@ import (
 	"xproxy/internal/engine"
 )
 
-// ErrNotTriggered 表示带阈值条件的订阅本次未命中条件, 不推送 (非失败)。
+// ErrNotTriggered 表示带阈值条件的定时任务本次未命中条件, 不推送 (非失败)。
 var ErrNotTriggered = errors.New("条件未命中, 未推送")
 
-// Execute 跑一次订阅: 取报表 → 执行 → (判定条件) → 渲染 → 推送。
-// 返回 nil 表示已推送; 返回 ErrNotTriggered 表示带条件订阅未命中 (正常跳过)。
-func Execute(sub *dao.SubscriptionRecord) error {
+// Execute 跑一次定时任务: 取报表 → 执行 → (判定条件) → 渲染 → 推送。
+// 返回 nil 表示已推送; 返回 ErrNotTriggered 表示带条件定时任务未命中 (正常跳过)。
+func Execute(sub *dao.ScheduleRecord) error {
 	if sub == nil {
-		return fmt.Errorf("订阅为空")
+		return fmt.Errorf("定时任务为空")
 	}
 	report, err := dao.GetReportByID(sub.ReportID)
 	if err != nil {
@@ -27,6 +27,11 @@ func Execute(sub *dao.SubscriptionRecord) error {
 	result, err := engine.NewRunner(report.DSN).WithNoCache(true).Run(report.Content, sub.Params)
 	if err != nil {
 		return fmt.Errorf("执行报表失败: %w", err)
+	}
+
+	// action=none: 只跑报表 (刷缓存/预热), 不推送。跑成功即完成。
+	if sub.Action == dao.ActionNone {
+		return nil
 	}
 
 	name := report.Name
@@ -56,7 +61,7 @@ func Execute(sub *dao.SubscriptionRecord) error {
 // viewURL 构造报表查看链接 (站点地址未配置则返回空, 消息不带链接):
 //   - 报表已公开分享 -> 公开查看页 view.html#/<token>
 //   - 否则 -> 控制台报表页 (需登录)
-func viewURL(report *dao.ReportRecord, sub *dao.SubscriptionRecord) string {
+func viewURL(report *dao.ReportRecord, sub *dao.ScheduleRecord) string {
 	base := conf.Get().SiteBaseURL()
 	if base == "" {
 		return ""
@@ -68,7 +73,7 @@ func viewURL(report *dao.ReportRecord, sub *dao.SubscriptionRecord) string {
 		}
 		return u
 	}
-	return fmt.Sprintf("%s/index.html#/reports/%d", base, report.Id)
+	return fmt.Sprintf("%s/#/reports/%d", base, report.Id)
 }
 
 // queryString 把固定参数拼成 url query (简单编码, 仅用于展示链接)。

@@ -105,7 +105,7 @@ bearer_token_env_var = "FOCUSBI_TOKEN"
    用 `preview_template` 试跑, 按返回的区块错误自动修。
 4. **落库发布**: "没问题, 创建并发布" → `create_report` + `publish_report`。
 
-发布后报表即对有权限的查看者可见, 也能配订阅推送。
+发布后报表即对有权限的查看者可见, 也能配定时任务。
 
 ## 5. 安全与边界
 

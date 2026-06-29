@@ -53,7 +53,7 @@ type Block struct {
 	Kpi       *KpiConfig          `json:"kpi,omitempty"` // KPI 卡片 (值 + 同环比 + 迷你趋势)
 	Markdown  string              `json:"markdown,omitempty"`
 	SQL       string              `json:"sql,omitempty"`
-	// Messages 波动检测等产出的告警消息 (移植自 dataddy report['message']); 供订阅推送读取。
+	// Messages 波动检测等产出的告警消息 (移植自 dataddy report['message']); 供定时任务读取。
 	Messages []string     `json:"messages,omitempty"`
 	Error    string       `json:"error,omitempty"`
 	Timing   *BlockTiming `json:"timing,omitempty"`
@@ -76,7 +76,7 @@ type Result struct {
 	Filters     []FilterDef `json:"filters"`
 	Blocks      []Block     `json:"blocks"`
 	AutoRefresh int         `json:"auto_refresh,omitempty"` // 报表级自动刷新间隔 (秒); 来自 report.settings, 0 不刷新
-	// Messages 汇总各区块的波动/告警消息 (按区块顺序); 供订阅推送直接读取。
+	// Messages 汇总各区块的波动/告警消息 (按区块顺序); 供定时任务直接读取。
 	Messages []string `json:"messages,omitempty"`
 	// PrependContent 页面顶部注入的原始 HTML (来自 report.settings); 前端 v-html 渲染。
 	PrependContent string        `json:"prepend_content,omitempty"`

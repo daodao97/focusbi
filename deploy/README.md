@@ -63,7 +63,7 @@ curl -fsSL https://raw.githubusercontent.com/daodao97/focusbi/main/deploy/instal
 | `FOCUSBI_INSTALL_DIR` | `./focusbi` | 安装目录 |
 | `FOCUSBI_IMAGE` | `ghcr.io/daodao97/focusbi:latest` | Docker 镜像 |
 | `FOCUSBI_PORT` | `8080` | 宿主机端口 |
-| `ENABLE_CRON` | `true` | 是否启用订阅调度 |
+| `ENABLE_CRON` | `true` | 是否启用任务调度 |
 | `SITE_URL` | `http://127.0.0.1:<port>` | 外部访问地址 |
 | `SITE_JWT_SECRET` | 自动生成 | 登录令牌签名密钥 |
 | `JWT_SECRET` | 自动生成 | `SITE_JWT_SECRET` 的兼容别名 |

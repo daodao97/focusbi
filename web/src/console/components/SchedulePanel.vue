@@ -1,9 +1,9 @@
 <script setup>
-// 报表订阅推送管理 (报表设置弹窗内的 Tab): 列出 / 新增 / 编辑 / 删除 / 测试 该报表的订阅。
+// 报表定时任务管理 (报表设置弹窗内的 Tab): 列出 / 新增 / 编辑 / 删除 / 测试 该报表的定时任务。
 import { ref, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { api } from '@/api'
-import SubscriptionForm from './SubscriptionForm.vue'
+import ScheduleForm from './ScheduleForm.vue'
 
 const props = defineProps({
   reportId: { type: Number, required: true },
@@ -21,7 +21,7 @@ const testing = ref(0)
 async function load() {
   loading.value = true
   try {
-    list.value = await api.listSubscriptions(props.reportId)
+    list.value = await api.listSchedules(props.reportId)
   } catch (e) {
     ElMessage.error(e.message)
   } finally {
@@ -34,10 +34,10 @@ function openEdit(row) { editing.value = row; formVisible.value = true }
 
 async function remove(row) {
   try {
-    await ElMessageBox.confirm(`删除订阅「${row.name || row.cron}」?`, '确认', { type: 'warning' })
+    await ElMessageBox.confirm(`删除任务「${row.name || row.cron}」?`, '确认', { type: 'warning' })
   } catch { return }
   try {
-    await api.deleteSubscription(props.reportId, row.id)
+    await api.deleteSchedule(props.reportId, row.id)
     await load()
   } catch (e) {
     ElMessage.error(e.message)
@@ -47,11 +47,12 @@ async function remove(row) {
 async function test(row) {
   testing.value = row.id
   try {
-    const r = await api.testSubscription(props.reportId, row.id)
+    const r = await api.testSchedule(props.reportId, row.id)
     if (r && r.triggered === false) ElMessage.info(r.message || '条件未命中, 未推送')
+    else if (row.action === 'none') ElMessage.success('已执行 (只跑不推)')
     else ElMessage.success('已推送, 请到群里查看')
   } catch (e) {
-    ElMessage.error('推送失败: ' + e.message)
+    ElMessage.error('执行失败: ' + e.message)
   } finally {
     testing.value = 0
   }
@@ -65,16 +66,16 @@ onMounted(load)
 <template>
   <div v-loading="loading">
     <div class="bar">
-      <el-button type="primary" size="small" @click="openCreate">新增订阅</el-button>
+      <el-button type="primary" size="small" @click="openCreate">新增任务</el-button>
     </div>
 
-    <el-table :data="list" size="small" empty-text="暂无订阅">
+    <el-table :data="list" size="small" empty-text="暂无任务">
       <el-table-column prop="name" label="名称" min-width="100">
         <template #default="{ row }">{{ row.name || '—' }}</template>
       </el-table-column>
       <el-table-column prop="cron" label="cron" width="110" />
       <el-table-column label="渠道" width="80">
-        <template #default="{ row }">{{ channelLabel(row.channel) }}</template>
+        <template #default="{ row }">{{ row.action === 'none' ? '只跑不推' : channelLabel(row.channel) }}</template>
       </el-table-column>
       <el-table-column label="状态" width="70">
         <template #default="{ row }">
@@ -99,7 +100,7 @@ onMounted(load)
       </el-table-column>
     </el-table>
 
-    <SubscriptionForm v-model="formVisible" :report-id="reportId" :filters="filters"
+    <ScheduleForm v-model="formVisible" :report-id="reportId" :filters="filters"
       :content="content" :dsn="dsn" :edit="editing" @saved="load" />
   </div>
 </template>

@@ -1,5 +1,5 @@
 <script setup>
-// 订阅新增/编辑表单 (弹窗), 被 SubscriptionPanel (报表设置内) 与 SubscriptionList (全局管理页) 共用。
+// 定时任务新增/编辑表单 (弹窗), 被 SchedulePanel (报表设置内) 与 ScheduleList (全局管理页) 共用。
 //
 // 两种用法:
 //   - 固定报表 (Panel): 传 report-id + filters, 不显示报表选择器。
@@ -17,7 +17,7 @@ const props = defineProps({
   dsn: { type: String, default: 'default' },       // 固定报表数据源 (Panel 用)
   selectable: { type: Boolean, default: false },   // 是否显示报表选择器 (List 用)
   reports: { type: Array, default: () => [] },     // 可选报表 [{id,name}] (List 用)
-  edit: { type: Object, default: null }            // 非空=编辑, 传入订阅行
+  edit: { type: Object, default: null }            // 非空=编辑, 传入任务行
 })
 const emit = defineEmits(['update:modelValue', 'saved'])
 
@@ -41,6 +41,7 @@ const cronPresets = [
 
 const blank = () => ({
   id: 0, report_id: props.reportId || 0, name: '', cron: '0 9 * * *',
+  action: 'webhook', // none 只跑不推 / webhook 推群机器人
   channel: 'lark', webhook: '', params: {}, enabled: true,
   // 阈值告警
   alarm: false, condition: { block: '', column: '', agg: 'any', op: '<', value: '' }
@@ -64,10 +65,10 @@ watch(() => props.modelValue, async (open) => {
   if (!open) return
   blocks.value = []
   if (props.edit) {
-    // 列表里的 webhook 是脱敏值; 拉取单条订阅取明文回填, 失败则留空 (留空保留原地址)
+    // 列表里的 webhook 是脱敏值; 拉取单条任务取明文回填, 失败则留空 (留空保留原地址)
     Object.assign(form, blank(), props.edit, { params: { ...(props.edit.params || {}) } })
     try {
-      const full = await api.getSubscription(props.edit.report_id, props.edit.id)
+      const full = await api.getSchedule(props.edit.report_id, props.edit.id)
       form.webhook = full.webhook || ''
       if (full.params) form.params = { ...full.params }
       if (full.condition && full.condition.column) {
@@ -116,21 +117,23 @@ function onPickReport(rid) {
 async function submit() {
   if (props.selectable && !form.report_id) { ElMessage.warning('请选择报表'); return }
   if (!form.cron.trim()) { ElMessage.warning('请填写 cron 表达式'); return }
-  if (!form.id && !form.webhook.trim()) { ElMessage.warning('请填写 webhook 地址'); return }
-  if (form.alarm) {
+  const needWebhook = form.action !== 'none'
+  if (needWebhook && !form.id && !form.webhook.trim()) { ElMessage.warning('请填写 webhook 地址'); return }
+  // none 动作不推送, 阈值告警无意义, 忽略
+  if (needWebhook && form.alarm) {
     if (!form.condition.column && form.condition.agg !== 'count') { ElMessage.warning('请选择条件列'); return }
     if (form.condition.value === '') { ElMessage.warning('请填写条件阈值'); return }
   }
   saving.value = true
   try {
     const rid = form.report_id || props.reportId
-    // alarm 开启才下发 condition; 关闭则 condition=null (定时推送)
-    const condition = form.alarm
+    // none 动作不推送: 不下发 condition; 否则 alarm 开启才下发 condition。
+    const condition = (form.action !== 'none' && form.alarm)
       ? { block: form.condition.block, column: form.condition.column, agg: form.condition.agg, op: form.condition.op, value: String(form.condition.value) }
       : null
-    const body = { name: form.name, cron: form.cron, channel: form.channel, webhook: form.webhook, params: form.params, enabled: form.enabled, condition }
-    if (form.id) await api.updateSubscription(rid, form.id, body)
-    else await api.createSubscription(rid, body)
+    const body = { name: form.name, cron: form.cron, action: form.action, channel: form.channel, webhook: form.webhook, params: form.params, enabled: form.enabled, condition }
+    if (form.id) await api.updateSchedule(rid, form.id, body)
+    else await api.createSchedule(rid, body)
     ElMessage.success('已保存')
     visible.value = false
     emit('saved')
@@ -143,7 +146,7 @@ async function submit() {
 </script>
 
 <template>
-  <el-dialog v-model="visible" :title="form.id ? '编辑订阅' : '新增订阅'" width="560px" append-to-body>
+  <el-dialog v-model="visible" :title="form.id ? '编辑任务' : '新增任务'" width="560px" append-to-body>
     <el-form label-width="92px" label-position="right">
       <el-form-item v-if="selectable" label="报表">
         <el-select :model-value="form.report_id || ''" placeholder="选择报表" filterable
@@ -164,25 +167,34 @@ async function submit() {
         </div>
         <div class="form-hint">标准 5 段 cron (分 时 日 月 周), 如 0 9 * * * = 每天 9:00。</div>
       </el-form-item>
-      <el-form-item label="渠道">
-        <el-radio-group v-model="form.channel">
-          <el-radio value="lark">飞书</el-radio>
-          <el-radio value="wework">企业微信</el-radio>
+      <el-form-item label="动作">
+        <el-radio-group v-model="form.action">
+          <el-radio value="webhook">推送群机器人</el-radio>
+          <el-radio value="none">只跑不推</el-radio>
         </el-radio-group>
+        <div class="form-hint">只跑不推: 到点执行报表 (刷新缓存 / 预热), 不发任何通知。</div>
       </el-form-item>
-      <el-form-item label="Webhook">
-        <el-input v-model="form.webhook" type="textarea" :rows="2"
-          placeholder="粘贴群机器人 webhook 完整地址" />
-      </el-form-item>
+      <template v-if="form.action !== 'none'">
+        <el-form-item label="渠道">
+          <el-radio-group v-model="form.channel">
+            <el-radio value="lark">飞书</el-radio>
+            <el-radio value="wework">企业微信</el-radio>
+          </el-radio-group>
+        </el-form-item>
+        <el-form-item label="Webhook">
+          <el-input v-model="form.webhook" type="textarea" :rows="2"
+            placeholder="粘贴群机器人 webhook 完整地址" />
+        </el-form-item>
+      </template>
       <el-form-item v-if="effectiveFilters.length" label="固定参数">
         <ReportFilters v-model="form.params" :filters="effectiveFilters" />
-        <div class="form-hint">订阅按这些参数跑报表; 留默认即按过滤器默认值。</div>
+        <div class="form-hint">任务按这些参数跑报表; 留默认即按过滤器默认值。</div>
       </el-form-item>
-      <el-form-item label="触发条件">
+      <el-form-item v-if="form.action !== 'none'" label="触发条件">
         <el-switch v-model="form.alarm" active-text="仅满足条件时推送" inline-prompt />
         <div class="form-hint">关闭=定时必推; 开启=跑完报表命中条件才推 (阈值告警)。</div>
       </el-form-item>
-      <template v-if="form.alarm">
+      <template v-if="form.action !== 'none' && form.alarm">
         <el-form-item label="区块">
           <el-select v-model="form.condition.block" placeholder="首个表格区块" clearable style="width:100%">
             <el-option v-for="b in tableBlocks" :key="b.id" :label="b.title || b.id" :value="b.id" />

@@ -1,4 +1,4 @@
-package subscription
+package schedule
 
 import (
 	"bytes"
@@ -26,7 +26,20 @@ func push(channel, webhook, text string) error {
 	if err := ValidateWebhook(webhook); err != nil {
 		return err
 	}
-	return postJSON(webhook, buildPayload(channel, text))
+	return postJSON(webhook, buildPayload(resolveChannel(channel, webhook), text))
+}
+
+// resolveChannel 以 webhook host 为准纠正渠道: 企微地址 (qyapi.weixin.qq.com) 一律
+// 按企微发, 避免用户 channel 选错 (如默认 lark) 却填了企微地址, 导致消息体格式不符
+// 被企微拒收 (invalid message type)。host 无法伪装, 比 channel 字段可靠。
+func resolveChannel(channel, webhook string) string {
+	if strings.Contains(webhook, "qyapi.weixin.qq.com") {
+		return ChannelWework
+	}
+	if strings.Contains(webhook, "feishu.cn") || strings.Contains(webhook, "larksuite.com") {
+		return ChannelLark
+	}
+	return channel
 }
 
 // buildPayload 按渠道构造文本消息体 (飞书 / 企业微信)。

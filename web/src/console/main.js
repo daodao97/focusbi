@@ -18,7 +18,7 @@ const routes = [
   { path: '/reports/:id/edit', name: 'report-edit', component: () => import('./views/ReportEdit.vue'), props: true },
   { path: '/dsn', name: 'dsn', component: () => import('./views/DsnList.vue') },
   { path: '/tokens', name: 'tokens', component: () => import('./views/TokenList.vue') },
-  { path: '/subscriptions', name: 'subscriptions', component: () => import('./views/SubscriptionList.vue') },
+  { path: '/schedules', name: 'schedules', component: () => import('./views/ScheduleList.vue') },
   { path: '/users', name: 'users', component: () => import('./views/UserList.vue') },
   { path: '/roles', name: 'roles', component: () => import('./views/RoleList.vue') }
 ]
