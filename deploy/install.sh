@@ -88,18 +88,21 @@ write_file() {
   printf '%s\n' "$content" >"$path"
 }
 
-normalize_mode() {
-  local mode="$1"
-  case "$mode" in
-    1|stack|all|compose) printf 'stack' ;;
-    2|external|app|single) printf 'external' ;;
-    *) die "invalid install mode: $mode" ;;
+# yes/no 询问, 返回 "1" / "0"。第二参为默认 (y/n)。
+ask_yesno() {
+  local prompt="$1"
+  local default="$2"
+  local ans
+  ans="$(ask "$prompt (y/n)" "$default")"
+  case "$ans" in
+    y|Y|yes|YES|1|true) printf '1' ;;
+    *) printf '0' ;;
   esac
 }
 
-stack_compose() {
+# compose 里的 mysql 服务块 (自托管时使用)。
+mysql_service() {
   cat <<'YAML'
-services:
   mysql:
     image: mysql:8.4
     environment:
@@ -115,6 +118,12 @@ services:
       retries: 30
     restart: unless-stopped
 
+YAML
+}
+
+# compose 里的 redis 服务块 (自托管时使用)。
+redis_service() {
+  cat <<'YAML'
   redis:
     image: redis:latest
     volumes:
@@ -123,61 +132,50 @@ services:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 3s
-      retries: 30
+      retries: 20
     restart: unless-stopped
 
-  app:
-    image: ${FOCUSBI_IMAGE}
-    command: ["/app/app", "--bind", "0.0.0.0:8080"]
-    environment:
-      APP_ENV: "dev"
-      ENABLE_CRON: "${ENABLE_CRON}"
-      SITE_URL: "${SITE_URL}"
-      SITE_JWT_SECRET: "${SITE_JWT_SECRET}"
-      ENGINE_QUERY_TIMEOUT: "${ENGINE_QUERY_TIMEOUT}"
-      AI_PROVIDER: "${AI_PROVIDER}"
-      AI_BASE_URL: "${AI_BASE_URL}"
-      AI_API_KEY: "${AI_API_KEY}"
-      AI_MODEL: "${AI_MODEL}"
-      TURNSTILE_SITE_KEY: "${TURNSTILE_SITE_KEY}"
-      TURNSTILE_SECRET_KEY: "${TURNSTILE_SECRET_KEY}"
-    ports:
-      - "${FOCUSBI_PORT}:8080"
-    volumes:
-      - ./conf.dev.yaml:/app/conf.dev.yaml:ro
-    depends_on:
-      mysql:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    restart: unless-stopped
 YAML
 }
 
-external_compose() {
+# compose 里的 app 服务块。$1/$2 = 是否自托管 mysql/redis (用于 depends_on)。
+app_service() {
+  local self_mysql="$1"
+  local self_redis="$2"
   cat <<'YAML'
-services:
   app:
-    image: ${FOCUSBI_IMAGE}
-    command: ["/app/app", "--bind", "0.0.0.0:8080"]
+    image: ${IMAGE:-ghcr.io/daodao97/focusbi:latest}
+    command: ["/app/app", "--bind", "0.0.0.0:8080", "--app-env", "prod"]
     environment:
-      APP_ENV: "dev"
-      ENABLE_CRON: "${ENABLE_CRON}"
-      SITE_URL: "${SITE_URL}"
-      SITE_JWT_SECRET: "${SITE_JWT_SECRET}"
-      ENGINE_QUERY_TIMEOUT: "${ENGINE_QUERY_TIMEOUT}"
-      AI_PROVIDER: "${AI_PROVIDER}"
-      AI_BASE_URL: "${AI_BASE_URL}"
-      AI_API_KEY: "${AI_API_KEY}"
-      AI_MODEL: "${AI_MODEL}"
-      TURNSTILE_SITE_KEY: "${TURNSTILE_SITE_KEY}"
-      TURNSTILE_SECRET_KEY: "${TURNSTILE_SECRET_KEY}"
+      ENABLE_CRON: "${ENABLE_CRON:-true}"   # 启用定时任务调度
     ports:
-      - "${FOCUSBI_PORT}:8080"
+      - "${PORT:-8080}:8080"
     volumes:
-      - ./conf.dev.yaml:/app/conf.dev.yaml:ro
+      # 挂载配置 (含 jwt_secret / 数据源); 改这里即可, 无需重建镜像
+      - ./conf.prod.yaml:/app/conf.prod.yaml:ro
     restart: unless-stopped
 YAML
+
+  # depends_on: 仅对自托管的依赖加健康检查等待。
+  if [[ "$self_mysql" == "1" || "$self_redis" == "1" ]]; then
+    printf '    depends_on:\n'
+    if [[ "$self_mysql" == "1" ]]; then
+      printf '      mysql:\n        condition: service_healthy\n'
+    fi
+    if [[ "$self_redis" == "1" ]]; then
+      printf '      redis:\n        condition: service_healthy\n'
+    fi
+  fi
+}
+
+# 组装 compose.yaml: app 必有, mysql/redis 按选择决定是否纳入。
+build_compose() {
+  local self_mysql="$1"
+  local self_redis="$2"
+  printf 'services:\n'
+  [[ "$self_mysql" == "1" ]] && mysql_service
+  [[ "$self_redis" == "1" ]] && redis_service
+  app_service "$self_mysql" "$self_redis"
 }
 
 app_config() {
@@ -215,33 +213,65 @@ site:
 YAML
 }
 
+# 生成 deploy.sh: 拉新镜像并滚动重启, 方便后续更新。
+deploy_script() {
+  cat <<'SH'
+#!/usr/bin/env bash
+# 更新 FocusBI: 拉取最新镜像并重启。在本目录 (含 compose.yaml) 执行。
+set -euo pipefail
+
+cd "$(dirname "$0")"
+
+if docker compose version >/dev/null 2>&1; then
+  COMPOSE="docker compose"
+elif command -v docker-compose >/dev/null 2>&1; then
+  COMPOSE="docker-compose"
+else
+  echo "需要 Docker Compose" >&2
+  exit 1
+fi
+
+echo "[deploy] 拉取最新镜像…"
+$COMPOSE pull
+
+echo "[deploy] 重启服务…"
+$COMPOSE up -d
+
+echo "[deploy] 清理旧镜像…"
+docker image prune -f >/dev/null 2>&1 || true
+
+echo "[deploy] 完成。日志: $COMPOSE logs -f app"
+SH
+}
+
 main() {
   need_cmd docker
   local compose
   compose="$(compose_cmd)"
 
-  local install_dir image port enable_cron query_timeout mode raw_mode site_url jwt_secret
+  local install_dir image port enable_cron query_timeout site_url jwt_secret
   install_dir="${FOCUSBI_INSTALL_DIR:-$(ask 'Install directory' "$DEFAULT_DIR")}"
-  image="${FOCUSBI_IMAGE:-$(ask 'Docker image' "$DEFAULT_IMAGE")}"
-  port="${FOCUSBI_PORT:-$(ask 'Host port' "$DEFAULT_PORT")}"
-  enable_cron="${ENABLE_CRON:-$(ask 'Enable subscription scheduler? true/false' 'true')}"
+  image="${IMAGE:-$(ask 'Docker image' "$DEFAULT_IMAGE")}"
+  port="${PORT:-$(ask 'Host port' "$DEFAULT_PORT")}"
+  enable_cron="${ENABLE_CRON:-$(ask 'Enable scheduled-task cron? true/false' 'true')}"
   query_timeout="${ENGINE_QUERY_TIMEOUT:-$(ask 'SQL query timeout' '3m')}"
 
-  if [[ -n "${FOCUSBI_MODE:-}" ]]; then
-    mode="$(normalize_mode "$FOCUSBI_MODE")"
+  # MySQL / Redis 各自选择: compose 自托管 还是 外部地址。
+  local self_mysql self_redis
+  if [[ -n "${FOCUSBI_SELF_MYSQL:-}" ]]; then
+    self_mysql="$FOCUSBI_SELF_MYSQL"
   else
-    if [[ "${FOCUSBI_ASSUME_YES:-}" != "1" ]]; then
-      printf '\nChoose install mode:\n' >/dev/tty
-      printf '  1) stack    FocusBI + MySQL + Redis (recommended for a new server)\n' >/dev/tty
-      printf '  2) external FocusBI only, use existing MySQL + Redis\n' >/dev/tty
-    fi
-    raw_mode="$(ask 'Mode' '1')"
-    mode="$(normalize_mode "$raw_mode")"
+    self_mysql="$(ask_yesno 'Run MySQL in compose? (n = use external MySQL)' 'y')"
+  fi
+  if [[ -n "${FOCUSBI_SELF_REDIS:-}" ]]; then
+    self_redis="$FOCUSBI_SELF_REDIS"
+  else
+    self_redis="$(ask_yesno 'Run Redis in compose? (n = use external Redis)' 'y')"
   fi
 
   mkdir -p "$install_dir"
   cd "$install_dir"
-  mkdir -p data
+  [[ "$self_mysql" == "1" || "$self_redis" == "1" ]] && mkdir -p data
 
   site_url="${SITE_URL:-$(ask 'Public site URL' "http://127.0.0.1:${port}")}"
   jwt_secret="${SITE_JWT_SECRET:-}"
@@ -249,44 +279,35 @@ main() {
     jwt_secret="${JWT_SECRET:-$(ask_secret 'JWT secret' "$(random_hex 32)")}"
   fi
 
-  local mysql_dsn redis_addr mysql_root_password
-  if [[ "$mode" == "stack" ]]; then
+  # 数据源 / Redis 地址: 自托管走服务名, 外部询问。
+  local mysql_dsn redis_addr mysql_root_password=""
+  if [[ "$self_mysql" == "1" ]]; then
     mysql_root_password="${MYSQL_ROOT_PASSWORD:-$(ask_secret 'MySQL root password' "$(random_hex 16)")}"
     mysql_dsn="root:${mysql_root_password}@tcp(mysql:3306)/focusbi?charset=utf8mb4&parseTime=True&loc=Local"
-    redis_addr="redis:6379"
-    write_file ".env" "FOCUSBI_IMAGE=${image}
-FOCUSBI_PORT=${port}
-ENABLE_CRON=${enable_cron}
-SITE_URL=${site_url}
-SITE_JWT_SECRET=${jwt_secret}
-ENGINE_QUERY_TIMEOUT=${query_timeout}
-AI_PROVIDER=${AI_PROVIDER:-}
-AI_BASE_URL=${AI_BASE_URL:-}
-AI_API_KEY=${AI_API_KEY:-}
-AI_MODEL=${AI_MODEL:-}
-TURNSTILE_SITE_KEY=${TURNSTILE_SITE_KEY:-}
-TURNSTILE_SECRET_KEY=${TURNSTILE_SECRET_KEY:-}
-MYSQL_ROOT_PASSWORD=${mysql_root_password}"
-    write_file "docker-compose.yml" "$(stack_compose)"
   else
     mysql_dsn="${MYSQL_DSN:-$(ask 'MySQL DSN' 'user:pass@tcp(mysql.example.com:3306)/focusbi?charset=utf8mb4&parseTime=True&loc=Local')}"
+  fi
+  if [[ "$self_redis" == "1" ]]; then
+    redis_addr="redis:6379"
+  else
     redis_addr="${REDIS_ADDR:-$(ask 'Redis addr' 'redis.example.com:6379')}"
-    write_file ".env" "FOCUSBI_IMAGE=${image}
-FOCUSBI_PORT=${port}
-ENABLE_CRON=${enable_cron}
-SITE_URL=${site_url}
-SITE_JWT_SECRET=${jwt_secret}
-ENGINE_QUERY_TIMEOUT=${query_timeout}
-AI_PROVIDER=${AI_PROVIDER:-}
-AI_BASE_URL=${AI_BASE_URL:-}
-AI_API_KEY=${AI_API_KEY:-}
-AI_MODEL=${AI_MODEL:-}
-TURNSTILE_SITE_KEY=${TURNSTILE_SITE_KEY:-}
-TURNSTILE_SECRET_KEY=${TURNSTILE_SECRET_KEY:-}"
-    write_file "docker-compose.yml" "$(external_compose)"
   fi
 
-  write_file "conf.dev.yaml" "$(app_config "$mysql_dsn" "$redis_addr" "$site_url" "$jwt_secret" "$query_timeout")"
+  # .env: 供 compose 插值 IMAGE / PORT / ENABLE_CRON (+ 自托管 mysql 密码)。
+  local env_content="IMAGE=${image}
+PORT=${port}
+ENABLE_CRON=${enable_cron}"
+  if [[ "$self_mysql" == "1" ]]; then
+    env_content="${env_content}
+MYSQL_ROOT_PASSWORD=${mysql_root_password}"
+  fi
+  write_file ".env" "$env_content"
+
+  write_file "compose.yaml" "$(build_compose "$self_mysql" "$self_redis")"
+  write_file "conf.prod.yaml" "$(app_config "$mysql_dsn" "$redis_addr" "$site_url" "$jwt_secret" "$query_timeout")"
+  write_file "deploy.sh" "$(deploy_script)"
+  chmod +x deploy.sh
+
   write_file "README.deploy.md" "FocusBI deployment
 
 Commands:
@@ -294,20 +315,22 @@ Commands:
   ${compose} up -d
   ${compose} logs -f app
   ${compose} down
+  ./deploy.sh            # 更新到最新镜像并重启
 
 Files:
-  .env              image, port and scheduler settings
-  conf.dev.yaml     FocusBI runtime config
-  docker-compose.yml
-  data/             MySQL/Redis data when using stack mode
+  .env              image / port / scheduler settings (+ mysql password when self-hosted)
+  conf.prod.yaml    FocusBI runtime config (datasource / redis / jwt / site)
+  compose.yaml
+  deploy.sh         一键更新脚本
+  data/             MySQL/Redis data when self-hosted
 "
 
   log "Files written to $(pwd)"
   log "Next steps:"
   printf '  cd %s\n' "$(pwd)"
-  printf '  %s pull\n' "$compose"
   printf '  %s up -d\n' "$compose"
   printf '  %s logs -f app\n' "$compose"
+  log "Update later with: ./deploy.sh"
   log "After startup, open ${site_url}"
 }
 
