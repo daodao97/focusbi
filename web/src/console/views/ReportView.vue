@@ -159,6 +159,8 @@ onMounted(load)
 .title { margin: 0; font-size: 18px; }
 .actions { display: flex; gap: 8px; }
 .sheet { background: var(--el-bg-color); border-radius: 8px; padding: 24px; min-height: 200px; }
+/* 长报表切换时 spinner 默认居中在很高的 sheet 内 (落在屏幕外), 改为固定在视口中央始终可见 */
+.sheet :deep(.el-loading-spinner) { position: fixed; top: 50%; }
 .share-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
 .share-hint { font-size: 12px; color: var(--el-text-color-secondary); line-height: 1.6; margin: 0 0 14px; }
 .share-actions { margin-top: 8px; text-align: right; }
