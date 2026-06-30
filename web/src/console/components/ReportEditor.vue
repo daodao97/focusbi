@@ -14,7 +14,7 @@ import ReportBlocks from '@/components/ReportBlocks.vue'
 import DocDrawer from '@/components/DocDrawer.vue'
 import SchedulePanel from './SchedulePanel.vue'
 import VersionDrawer from './VersionDrawer.vue'
-import { Reading, Setting } from '@element-plus/icons-vue'
+import { Reading, Setting, View, Hide } from '@element-plus/icons-vue'
 
 const props = defineProps({
   id: { type: [Number, String], default: 0 }, // 报表 id, 0/空 表示新建
@@ -176,6 +176,19 @@ async function publish() {
 
 function onAiUpdate(content) { report.content = content }
 
+// 切换侧边菜单可见性: 独立接口立即生效 (与草稿/发布无关)。新报表 (未保存) 不显示该按钮。
+async function toggleVisible() {
+  const next = !report.visible
+  try {
+    await api.setReportVisible(report.id, next)
+    report.visible = next
+    ElMessage.success(next ? '已设为可见' : '已设为隐藏')
+    emit('saved', report.id, 'save') // 通知宿主刷新左树 (可见性图标)
+  } catch (e) {
+    ElMessage.error(e.message)
+  }
+}
+
 // 合并 autoRefresh / prependContent 进 settings JSON, 保留其他已有键 (前向兼容)。
 function buildSettings() {
   let obj = {}
@@ -213,7 +226,7 @@ defineExpose({ save, reload: load })
         <el-button v-if="report.id" text @click="versionOpen = true">历史版本</el-button>
         <template v-if="mode === 'edit'">
           <el-button :loading="previewing" @click="doPreview">预览</el-button>
-          <el-button :disabled="!draftDirty || !nameValid" @click="save">保存</el-button>
+          <el-button :type="draftDirty ? 'warning' : ''" :disabled="!draftDirty || !nameValid" @click="save">保存</el-button>
           <el-tooltip :content="publishHint" :disabled="!publishHint" placement="top">
             <span>
               <el-button type="primary" :disabled="!dirty || !nameValid" :loading="publishing"
@@ -223,7 +236,7 @@ defineExpose({ save, reload: load })
         </template>
         <template v-else>
           <el-button @click="cancelPreview">取消预览</el-button>
-          <el-button :disabled="!draftDirty || !nameValid" @click="save">保存</el-button>
+          <el-button :type="draftDirty ? 'warning' : ''" :disabled="!draftDirty || !nameValid" @click="save">保存</el-button>
           <el-tooltip :content="publishHint" :disabled="!publishHint" placement="top">
             <span>
               <el-button type="primary" :disabled="!dirty || !nameValid" :loading="publishing"
@@ -249,6 +262,9 @@ defineExpose({ save, reload: load })
               <el-option v-if="canReadDsnById('default')" label="default" value="default" />
               <el-option v-for="d in dsnList" :key="d.id" :label="d.name" :value="d.name" />
             </el-select>
+            <el-tooltip v-if="report.id" :content="report.visible ? '侧边菜单可见 (点击隐藏)' : '侧边菜单隐藏 (点击显示)'" placement="top">
+              <el-button :icon="report.visible ? View : Hide" :type="report.visible ? '' : 'info'" @click="toggleVisible" />
+            </el-tooltip>
             <el-tooltip content="报表设置" placement="top">
               <el-button :icon="Setting" @click="settingsOpen = true" />
             </el-tooltip>

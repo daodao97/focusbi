@@ -85,6 +85,8 @@ func Setup(e *gin.Engine) {
 		authed.POST("/report/ai/stream", auth.Require(resReportManage, "rw"), aiModifyStream)
 		// 分享开关: 需 report.manage:rw
 		authed.POST("/report/:id/share", auth.Require(resReportManage, "rw"), setReportShare)
+		// 侧边菜单可见性开关: 需 report.manage:rw
+		authed.POST("/report/:id/visible", auth.Require(resReportManage, "rw"), setReportVisible)
 		// 拖拽排序/移动: 批量更新 parent_id + sort
 		authed.POST("/report/reorder", auth.Require(resReportManage, "rw"), reorderReports)
 
@@ -409,6 +411,26 @@ func updateReport(c *gin.Context) {
 		return
 	}
 	ok(c, gin.H{"id": id})
+}
+
+// setReportVisible 开启/关闭某报表在侧边菜单的可见性。
+func setReportVisible(c *gin.Context) {
+	id, valid := paramID(c)
+	if !valid {
+		return
+	}
+	var req struct {
+		Visible bool `json:"visible"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		fail(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := dao.SetReportVisible(id, req.Visible); err != nil {
+		fail(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	ok(c, gin.H{"id": id, "visible": req.Visible})
 }
 
 // publishReport 发布: 把开发版草稿同步到发布版 (对查看者生效), 并记一条版本快照。

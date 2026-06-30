@@ -37,8 +37,10 @@ onUnmounted(() => window.removeEventListener('resize', onResize))
 
 const isLoginPage = computed(() => route.name === 'login')
 
-// 组装报表树 (文件夹 + 报表)
-const reportTree = computed(() => buildTree(reports.value))
+// 组装报表树 (文件夹 + 报表); 过滤掉 visible=false 的报表 (侧边菜单不可见)。
+// 文件夹始终保留 (visible 仅对报表生效)。
+const reportTree = computed(() =>
+  buildTree(reports.value.filter(r => r.type === 'folder' || r.visible !== false)))
 
 async function loadReports() {
   if (isLoginPage.value || !getToken()) return

@@ -2,7 +2,7 @@
 import { ref, reactive, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Document, Folder, MoreFilled } from '@element-plus/icons-vue'
+import { Document, Folder, MoreFilled, Hide } from '@element-plus/icons-vue'
 import { api } from '@/api'
 import { buildTree, folderOptions } from '@/tree'
 import { canManageReports } from '@/perm'
@@ -179,6 +179,9 @@ onMounted(load)
                 <Document v-else />
               </el-icon>
               <span>{{ data.name }}</span>
+              <el-tooltip v-if="data.type !== 'folder' && data.visible === false" content="已隐藏 (不在侧边菜单显示)" placement="top">
+                <el-icon class="hidden-icon"><Hide /></el-icon>
+              </el-tooltip>
             </span>
             <span class="node-ops" @click.stop>
               <template v-if="data.type === 'folder'">
@@ -261,6 +264,7 @@ onMounted(load)
 .node-label { display: inline-flex; align-items: center; gap: 6px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .node-label span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .node-icon { flex: none; color: var(--el-text-color-secondary); }
+.hidden-icon { flex: none; color: var(--el-text-color-secondary); font-size: 13px; }
 .node-ops { opacity: 0; transition: opacity .15s; }
 .tree-node:hover .node-ops { opacity: 1; }
 .more { cursor: pointer; color: var(--el-text-color-secondary); }

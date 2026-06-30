@@ -145,6 +145,9 @@ export const api = {
   // 分享 (管理端开关)
   setShare: (id, enable) => request('POST', `/report/${id}/share`, { enable }),
 
+  // 侧边菜单可见性 (管理端开关)
+  setReportVisible: (id, visible) => request('POST', `/report/${id}/visible`, { visible }),
+
   // 定时任务推送 (飞书/企微)
   listAllSchedules: () => request('GET', '/report/schedules'),
   listSchedules: (rid) => request('GET', `/report/${rid}/schedule`),

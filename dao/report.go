@@ -24,6 +24,7 @@ type ReportRecord struct {
 	Remark     string    `json:"remark"`
 	IsPublic   bool      `json:"is_public"`             // 是否开启公开分享
 	ShareToken string    `json:"share_token,omitempty"` // 公开访问令牌 (不可枚举)
+	Visible    bool      `json:"visible"`               // 是否在侧边菜单可见; 默认 true
 	CreatedAt  time.Time `json:"created_at"`
 	UpdatedAt  time.Time `json:"updated_at"`
 }
@@ -86,6 +87,7 @@ func (r *ReportRecord) FromRecord(record xdb.Record) {
 	r.Remark = record.GetString("remark")
 	r.IsPublic = record.GetInt("is_public") != 0
 	r.ShareToken = record.GetString("share_token")
+	r.Visible = record.GetInt("visible") != 0
 	if t := record.GetTime("created_at"); t != nil {
 		r.CreatedAt = *t
 	}
@@ -148,6 +150,15 @@ func SetReportShare(id int, enable bool, token string) error {
 		updates["share_token"] = token
 	}
 	_, err := Report.Update(updates, xdb.WhereEq("id", id))
+	return err
+}
+
+// SetReportVisible 设置某报表的侧边菜单可见性。
+func SetReportVisible(id int, visible bool) error {
+	if Report == nil {
+		return fmt.Errorf("report model not initialized")
+	}
+	_, err := Report.Update(xdb.Record{"visible": boolToInt(visible)}, xdb.WhereEq("id", id))
 	return err
 }
 
