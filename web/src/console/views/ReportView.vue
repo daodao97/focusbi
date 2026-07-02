@@ -5,22 +5,20 @@ import { ElMessage } from 'element-plus'
 import { VideoPlay, VideoPause } from '@element-plus/icons-vue'
 import { api } from '@/api'
 import { copyText } from '@/clipboard'
-import { canWriteReport } from '@/perm'
 import { paramsToQuery, queryToParams, sameQuery } from '@/params'
 import { useAutoRefresh } from '@/autorefresh'
 import ReportFilters from '@/components/ReportFilters.vue'
 import ReportBlocks from '@/components/ReportBlocks.vue'
 import TimingTooltip from '@/components/TimingTooltip.vue'
 
-// 编辑/分享按钮按"能否写该报表"显示 (report.<id>:w 或祖先文件夹递归), 与后端判权一致。
-const parents = ref({})
-const canManage = computed(() => canWriteReport(report.id, parents.value))
+// 编辑/分享按钮按后端返回的 can_write 显示。
+const canManage = computed(() => !!report.can_write)
 
 const props = defineProps({ id: { type: String, default: '' } })
 const route = useRoute()
 const router = useRouter()
 
-const report = reactive({ id: 0, name: '', is_public: false, share_token: '' })
+const report = reactive({ id: 0, name: '', is_public: false, share_token: '', can_write: false })
 const result = ref(null)
 const params = ref({})
 const loading = ref(false)
@@ -35,12 +33,7 @@ async function load() {
   report.name = r.name
   report.is_public = r.is_public
   report.share_token = r.share_token || ''
-  // 取报表树 (id->parent) 供祖先链写权限判定; 失败不阻断查看。
-  api.listReports().then(list => {
-    const m = {}
-    for (const x of list) m[x.id] = x.parent_id
-    parents.value = m
-  }).catch(() => {})
+  report.can_write = !!r.can_write
   // 初始过滤值来自 URL query, 方便分享链接直接复现
   params.value = queryToParams(route.query)
   await run()

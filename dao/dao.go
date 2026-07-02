@@ -26,7 +26,6 @@ func Init() error {
 		xdb.SetCache(xcache.NewRedis(rdb, xcache.WithPrefix("xdb")))
 	}
 
-	ProjectUser = xdb.New("project_user", xdb.WithCacheKey("id"))
 	Dsn = xdb.New("dsn")
 	Report = xdb.New("report")
 	Schedule = xdb.New("report_schedule")

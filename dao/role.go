@@ -57,19 +57,6 @@ func CreateRole(r *RoleRecord) (int64, error) {
 	return Role.Insert(r.Record())
 }
 
-func GetRoleByID(id int) (*RoleRecord, error) {
-	if Role == nil {
-		return nil, fmt.Errorf("role model not initialized")
-	}
-	rec, err := Role.First(xdb.WhereEq("id", id))
-	if err != nil {
-		return nil, err
-	}
-	r := &RoleRecord{}
-	r.FromRecord(rec)
-	return r, nil
-}
-
 func ListRoles() ([]*RoleRecord, error) {
 	if Role == nil {
 		return nil, fmt.Errorf("role model not initialized")
@@ -100,24 +87,6 @@ func ListRolesByIDs(ids []int) ([]*RoleRecord, error) {
 		anyIDs[i] = id
 	}
 	records, err := Role.Selects(xdb.WhereIn("id", anyIDs))
-	if err != nil {
-		return nil, err
-	}
-	out := make([]*RoleRecord, 0, len(records))
-	for _, rec := range records {
-		r := &RoleRecord{}
-		r.FromRecord(rec)
-		out = append(out, r)
-	}
-	return out, nil
-}
-
-// ListRolesByParent 取某父角色下的直接子角色 (用于继承树展开)。
-func ListRolesByParent(parentID int) ([]*RoleRecord, error) {
-	if Role == nil {
-		return nil, fmt.Errorf("role model not initialized")
-	}
-	records, err := Role.Selects(xdb.WhereEq("parent_id", parentID))
 	if err != nil {
 		return nil, err
 	}

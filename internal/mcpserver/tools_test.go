@@ -2,6 +2,8 @@ package mcpserver
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"strconv"
 	"strings"
 	"testing"
@@ -36,6 +38,13 @@ func setupTestDB(t *testing.T) {
 			content TEXT DEFAULT '', dev_content TEXT DEFAULT '', settings TEXT DEFAULT '',
 			remark TEXT DEFAULT '', is_public INTEGER DEFAULT 0, share_token TEXT DEFAULT '',
 			created_at DATETIME, updated_at DATETIME)`,
+		`DROP TABLE IF EXISTS user`,
+		`CREATE TABLE user(id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT, password TEXT, nick TEXT,
+			roles TEXT, is_admin INTEGER DEFAULT 0, email TEXT, avatar TEXT,
+			created_at DATETIME, updated_at DATETIME)`,
+		`DROP TABLE IF EXISTS role`,
+		`CREATE TABLE role(id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, parent_id INTEGER DEFAULT 0,
+			resource TEXT, remark TEXT, created_at DATETIME, updated_at DATETIME)`,
 		`DROP TABLE IF EXISTS dsn`,
 		`CREATE TABLE dsn(id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, driver TEXT, dsn TEXT,
 			remark TEXT, ssh_enabled INTEGER DEFAULT 0, ssh_host TEXT, ssh_port INTEGER DEFAULT 22,
@@ -52,13 +61,40 @@ func setupTestDB(t *testing.T) {
 	}
 	dao.Report = xdb.New("report")
 	dao.Dsn = xdb.New("dsn")
+	dao.User = xdb.New("user")
+	dao.Role = xdb.New("role")
 }
 
-// ctxWithPerm 构造一个带指定权限的调用上下文 (绕过 HTTP 鉴权, 直接测工具门禁)。
-func ctxWithPerm(resources map[string]string) context.Context {
-	perm := auth.NewPermissionFromResources(resources)
-	pr := &principal{user: &dao.UserRecord{Id: 1, Nick: "tester"}, perm: perm}
-	return withPrincipal(context.Background(), pr)
+// ctxWithPerm 构造一个带指定权限的调用上下文, 权限仍通过真实 role 记录编译。
+func ctxWithPerm(t *testing.T, resources map[string]string) context.Context {
+	t.Helper()
+	raw, err := json.Marshal(resources)
+	if err != nil {
+		t.Fatalf("marshal resources: %v", err)
+	}
+	rid, err := dao.CreateRole(&dao.RoleRecord{
+		Name:     fmt.Sprintf("test-role-%d", time.Now().UnixNano()),
+		Resource: string(raw),
+	})
+	if err != nil {
+		t.Fatalf("create role: %v", err)
+	}
+	user := &dao.UserRecord{
+		Username: fmt.Sprintf("tester-%d", time.Now().UnixNano()),
+		Nick:     "tester",
+		Roles:    strconv.FormatInt(rid, 10),
+	}
+	uid, err := dao.CreateUser(user)
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	user.Id = int(uid)
+	perm, err := auth.NewPermission(user)
+	if err != nil {
+		t.Fatalf("new permission: %v", err)
+	}
+	pr := &principal{user: user, perm: perm}
+	return context.WithValue(context.Background(), ctxUserKey{}, pr)
 }
 
 func TestUnauthenticatedRejected(t *testing.T) {
@@ -71,12 +107,12 @@ func TestUnauthenticatedRejected(t *testing.T) {
 func TestCreateReportRequiresWrite(t *testing.T) {
 	setupTestDB(t)
 	// 只读权限 -> 创建被拒。
-	roCtx := ctxWithPerm(map[string]string{"report": "Rr"})
+	roCtx := ctxWithPerm(t, map[string]string{"report": "Rr"})
 	if _, _, err := createReportTool(roCtx, nil, createReportIn{Name: "x"}); err == nil {
 		t.Fatal("仅读权限不应能创建报表")
 	}
 	// 有全局 report 写权限 -> 可在根目录创建。
-	rwCtx := ctxWithPerm(map[string]string{"report": "Rrw"})
+	rwCtx := ctxWithPerm(t, map[string]string{"report": "Rrw"})
 	_, out, err := createReportTool(rwCtx, nil, createReportIn{Name: "销售日报", DevContent: "SELECT 1;"})
 	if err != nil {
 		t.Fatalf("有写权限创建失败: %v", err)
@@ -85,7 +121,7 @@ func TestCreateReportRequiresWrite(t *testing.T) {
 		t.Fatalf("应返回新报表 id, got %d", out.ID)
 	}
 	// 仅单报表写权限不能扩展成根目录创建权限。
-	singleCtx := ctxWithPerm(map[string]string{"report.5": "rw"})
+	singleCtx := ctxWithPerm(t, map[string]string{"report.5": "rw"})
 	if _, _, err := createReportTool(singleCtx, nil, createReportIn{Name: "root"}); err == nil {
 		t.Fatal("单报表写权限不应能在根目录创建报表")
 	}
@@ -93,12 +129,12 @@ func TestCreateReportRequiresWrite(t *testing.T) {
 
 func TestListReportsFilteredByPermission(t *testing.T) {
 	setupTestDB(t)
-	rwCtx := ctxWithPerm(map[string]string{"report": "Rrw"})
+	rwCtx := ctxWithPerm(t, map[string]string{"report": "Rrw"})
 	if _, _, err := createReportTool(rwCtx, nil, createReportIn{Name: "r1"}); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 	// 无任何 report 读权限的用户 -> 列表为空 (不泄漏)。
-	noCtx := ctxWithPerm(map[string]string{"dsn": "r"})
+	noCtx := ctxWithPerm(t, map[string]string{"dsn": "r"})
 	_, out, err := listReportsTool(noCtx, nil, emptyIn{})
 	if err != nil {
 		t.Fatalf("list: %v", err)
@@ -107,7 +143,7 @@ func TestListReportsFilteredByPermission(t *testing.T) {
 		t.Fatalf("无读权限应看不到报表, got %d", len(out.Reports))
 	}
 	// 全局读权限 -> 能看到。
-	roCtx := ctxWithPerm(map[string]string{"report": "Rr"})
+	roCtx := ctxWithPerm(t, map[string]string{"report": "Rr"})
 	_, out2, _ := listReportsTool(roCtx, nil, emptyIn{})
 	if len(out2.Reports) == 0 {
 		t.Fatal("有读权限应能看到报表")
@@ -117,7 +153,7 @@ func TestListReportsFilteredByPermission(t *testing.T) {
 func TestReportURLFromSiteConfig(t *testing.T) {
 	setupTestDB(t)
 	conf.Get().Site.URL = "https://bi.example.com/" // 尾部斜杠应被 SiteBaseURL 去掉
-	rwCtx := ctxWithPerm(map[string]string{"report": "Rrw"})
+	rwCtx := ctxWithPerm(t, map[string]string{"report": "Rrw"})
 
 	// 报表 -> 控制台查看链接 + 编辑链接
 	_, created, err := createReportTool(rwCtx, nil, createReportIn{Name: "r1"})
@@ -158,7 +194,7 @@ func TestReportURLFromSiteConfig(t *testing.T) {
 
 func TestQueryRawSelectOnly(t *testing.T) {
 	setupTestDB(t)
-	ctx := ctxWithPerm(map[string]string{"dsn": "r"})
+	ctx := ctxWithPerm(t, map[string]string{"dsn": "r"})
 
 	// 非 SELECT 被拒。
 	for _, sql := range []string{
@@ -185,7 +221,7 @@ func TestQueryRawSelectOnly(t *testing.T) {
 func TestQueryRawRequiresDsnRead(t *testing.T) {
 	setupTestDB(t)
 	// 无 dsn 权限 -> 拒绝。
-	ctx := ctxWithPerm(map[string]string{"report": "Rrw"})
+	ctx := ctxWithPerm(t, map[string]string{"report": "Rrw"})
 	if _, _, err := queryRawTool(ctx, nil, queryRawIn{DSN: "default", SQL: "SELECT 1"}); err == nil {
 		t.Fatal("无 dsn 读权限应被拒绝")
 	}
@@ -194,18 +230,57 @@ func TestQueryRawRequiresDsnRead(t *testing.T) {
 func TestPreviewRequiresManage(t *testing.T) {
 	setupTestDB(t)
 	// 仅读 -> 拒绝。
-	if _, _, err := previewTemplateTool(ctxWithPerm(map[string]string{"report": "Rr"}), nil,
+	if _, _, err := previewTemplateTool(ctxWithPerm(t, map[string]string{"report": "Rr"}), nil,
 		previewIn{DSN: "default", Content: "SELECT day, amount FROM biz;"}); err == nil {
 		t.Fatal("preview 需报表写权限")
 	}
 	// 有写 -> 成功并返回区块。
-	_, out, err := previewTemplateTool(ctxWithPerm(map[string]string{"report.5": "rw"}), nil,
+	_, out, err := previewTemplateTool(ctxWithPerm(t, map[string]string{"report.5": "rw"}), nil,
 		previewIn{DSN: "default", Content: "SELECT day, amount FROM biz;"})
 	if err != nil {
 		t.Fatalf("preview 失败: %v", err)
 	}
 	if len(out.Blocks) == 0 {
 		t.Fatal("preview 应返回至少一个区块")
+	}
+}
+
+// describe_table 应带每列去重样例值。
+func TestDescribeTableSamples(t *testing.T) {
+	setupTestDB(t)
+	_, out, err := describeTableTool(ctxWithPerm(t, map[string]string{"dsn": "r"}), nil,
+		describeTableIn{DSN: "default", Table: "biz"})
+	if err != nil {
+		t.Fatalf("describe_table 失败: %v", err)
+	}
+	var day *datasource.Column
+	for i := range out.Columns {
+		if out.Columns[i].Name == "day" {
+			day = &out.Columns[i]
+		}
+	}
+	if day == nil || len(day.Samples) == 0 {
+		t.Fatalf("day 列应带样例值, got %+v", out.Columns)
+	}
+}
+
+// preview validate_only: 不连库, 写操作在 errors 里带分类+提示。
+func TestPreviewValidateOnly(t *testing.T) {
+	setupTestDB(t)
+	ctx := ctxWithPerm(t, map[string]string{"report.5": "rw"})
+	// 合法 -> 无 errors。
+	if _, out, err := previewTemplateTool(ctx, nil, previewIn{
+		Content: "SELECT day FROM biz;", ValidateOnly: true}); err != nil || len(out.Errors) != 0 {
+		t.Fatalf("合法模板 validate_only 不应报错: err=%v errors=%+v", err, out.Errors)
+	}
+	// SELECT 块内夹带写操作 (stacked) -> errors 带 kind=sql + hint。
+	_, out, err := previewTemplateTool(ctx, nil, previewIn{
+		Content: "SELECT 1; DROP TABLE biz;", ValidateOnly: true})
+	if err != nil {
+		t.Fatalf("validate_only 本身不应返回顶层错误: %v", err)
+	}
+	if len(out.Errors) != 1 || out.Errors[0].Kind != "sql" || out.Errors[0].Hint == "" {
+		t.Fatalf("堆叠写操作应在 errors 里带 sql 分类与 hint, got %+v", out.Errors)
 	}
 }
 
@@ -232,7 +307,8 @@ func TestResolveUserIDSetsExpiration(t *testing.T) {
 }
 
 func TestSyntaxDocReturned(t *testing.T) {
-	ctx := ctxWithPerm(map[string]string{})
+	setupTestDB(t)
+	ctx := ctxWithPerm(t, map[string]string{})
 	_, out, err := getSyntaxDoc(ctx, nil, emptyIn{})
 	if err != nil {
 		t.Fatalf("get_syntax_doc: %v", err)

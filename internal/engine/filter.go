@@ -126,6 +126,10 @@ func (r *Runner) resolveFilterOptions(filters []FilterDef) {
 		if r.authz != nil && r.authz(dsn) != nil {
 			continue
 		}
+		// 只读契约: enum_sql 与声明式区块/脚本 query() 一样只允许只读查询, 非法则跳过 (选项留空)。
+		if err := validateReadOnlySQL(f.optionSQL); err != nil {
+			continue
+		}
 		qr, err := datasource.Query(dsn, f.optionSQL)
 		if err != nil || qr == nil {
 			continue
@@ -260,9 +264,15 @@ func macroValues(filters []FilterDef, params map[string]string) map[string]strin
 	return macros
 }
 
-// sqlEscape 对宏值做 SQL 单引号转义 (' -> ”), 使其嵌入 '{name}' 后无法越出字面量。
+// sqlEscape 对宏值做 SQL 转义, 使其嵌入 '{name}' 后无法越出字面量。
 // 作者按 SYNTAX 约定自行在 SQL 里写引号 (WHERE x = '{name}'), 本函数只保证引号内安全。
+//
+// 必须先转义反斜杠再转义单引号: MySQL 默认模式 (NO_BACKSLASH_ESCAPES 关闭) 下 \ 是转义符,
+// 值 `a\' OR 1=1 -- ` 若只把 ' 翻倍会得到 'a\” ...', 其中 \' 被当作转义引号、后一个 ' 才闭合
+// 字符串, 使 OR 1=1 逃逸。先 \ -> \\ 再 ' -> ” 可堵死此路径。PG/SQLite 标准模式下 \ 非转义符,
+// 多一个 \\ 只是多一个字面反斜杠, 不影响正确性 (真需原值用 {name_raw})。
 func sqlEscape(v string) string {
+	v = strings.ReplaceAll(v, `\`, `\\`)
 	return strings.ReplaceAll(v, "'", "''")
 }
 
@@ -387,10 +397,6 @@ func splitRange(val, typ string) (string, string) {
 		return strings.TrimSpace(seg[0]), strings.TrimSpace(seg[0])
 	}
 	return "", ""
-}
-
-func today(layout string) string {
-	return time.Now().Format(layout)
 }
 
 // resolveRelativeTime 解析简单的相对日期表达式为 time.Time。

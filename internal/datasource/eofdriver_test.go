@@ -7,7 +7,7 @@ import (
 )
 
 // eofDriver 是一个最小 database/sql 驱动, 仅供测试:
-//   - 查询 "BADCONN" 返回 io.EOF (被 isBadConnErr 判为坏连接);
+//   - 查询 "BADCONN" 返回 io.EOF (模拟旧版坏连接判断会命中的错误);
 //   - 其余查询返回空结果集。
 //
 // 用于确定性复刻「坏连接出错」, 验证 Query 不会因此 Invalidate 共享池。

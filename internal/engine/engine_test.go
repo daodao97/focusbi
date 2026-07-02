@@ -216,19 +216,6 @@ func TestParseFilterTypeMultiple(t *testing.T) {
 	}
 }
 
-func TestPhpFormatToGoLayout(t *testing.T) {
-	cases := map[string]string{
-		"Y-m":         "2006-01",
-		"Y-m-d":       "2006-01-02",
-		"Y-m-d H:i:s": "2006-01-02 15:04:05",
-	}
-	for in, want := range cases {
-		if got := phpFormatToGoLayout(in); got != want {
-			t.Errorf("phpFormatToGoLayout(%q)=%q want %q", in, got, want)
-		}
-	}
-}
-
 func TestDefaultValueLiteralFormat(t *testing.T) {
 	// date_range[Y-m-01]: "01" 必须作为字面量保留, 而非被当成 Go 布局的月份 token
 	f := FilterDef{Name: "month", Type: "date_range", Format: "Y-m-01", Default: "today"}
@@ -335,6 +322,8 @@ func TestValidateReadOnlySQL(t *testing.T) {
 		"select 'delete; drop' AS txt;",
 		"WITH x AS (SELECT 1) SELECT * FROM x",
 		"/* comment */ SELECT * FROM t",
+		"SELECT amount AS `into` FROM t", // into 作反引号列别名: 引号内跳过分词, 不误伤
+		"SELECT 'INTO OUTFILE' AS note",  // 字符串字面量里的关键字不触发
 	}
 	for _, sql := range valid {
 		if err := validateReadOnlySQL(sql); err != nil {
@@ -348,6 +337,9 @@ func TestValidateReadOnlySQL(t *testing.T) {
 		"DROP TABLE users",
 		"SELECT 1; SELECT 2",
 		"WITH moved AS (DELETE FROM users RETURNING id) SELECT * FROM moved",
+		"SELECT * FROM users INTO OUTFILE '/tmp/x'", // 文件写: 单条 SELECT, 关键字校验挡不住
+		"SELECT * INTO DUMPFILE '/tmp/x' FROM users",
+		"SELECT load_file('/etc/passwd')", // 文件读
 	}
 	for _, sql := range invalid {
 		if err := validateReadOnlySQL(sql); err == nil {
@@ -377,6 +369,26 @@ query('UPDATE pv SET pv = 1')
 	}
 	if len(res.Blocks) != 1 || !strings.Contains(res.Blocks[0].Error, "仅支持只读") {
 		t.Fatalf("script write query should be rejected, blocks=%+v", res.Blocks)
+	}
+}
+
+// enum_sql 只允许只读查询: 写操作被拒 (选项留空), 只读正常填充。
+func TestResolveFilterOptionsReadOnly(t *testing.T) {
+	setupSQLiteDefault(t)
+	r := NewRunner("default")
+
+	// 写操作 optionSQL -> 校验拦截, 选项留空。
+	bad := []FilterDef{{Name: "x", Type: "enum", optionSQL: "DELETE FROM pv"}}
+	r.resolveFilterOptions(bad)
+	if len(bad[0].Options) != 0 {
+		t.Errorf("写操作 enum_sql 应被拒, 选项应为空, got %+v", bad[0].Options)
+	}
+
+	// 只读 optionSQL -> 正常填充。
+	good := []FilterDef{{Name: "d", Type: "enum", optionSQL: "SELECT day AS value, day AS label FROM pv ORDER BY day"}}
+	r.resolveFilterOptions(good)
+	if len(good[0].Options) == 0 {
+		t.Errorf("只读 enum_sql 应填充选项, got 空")
 	}
 }
 
@@ -510,6 +522,13 @@ func TestMacroValuesEscapesScalars(t *testing.T) {
 			t.Errorf("%s 存在未转义的落单单引号, 可越出字面量: %q", name, m[name])
 		}
 	}
+	// 反斜杠注入 (MySQL 默认模式 \ 为转义符): `a\' OR 1=1 -- ` 必须先 \->\\ 再 '->'',
+	// 否则 \' 会转义掉收尾引号使字符串不闭合。判据: 转义后每个 \ 都成对、去掉 \\ 与 '' 后无落单 '。
+	bs := macroValues(filters, map[string]string{"kw": `a\' OR 1=1 -- `})["kw"]
+	stripped := strings.ReplaceAll(strings.ReplaceAll(bs, `\\`, ""), "''", "")
+	if strings.Contains(stripped, "'") || strings.Contains(stripped, `\`) {
+		t.Errorf("反斜杠未成对转义, 可越出字面量: %q", bs)
+	}
 	sql := applyMacros("WHERE id = {id}", m)
 	// 数值型非法输入置空 (无引号列不会变成 id = 1 OR 1=1)。
 	if strings.Contains(sql, "id = 1 OR") {
@@ -575,6 +594,21 @@ func TestMacroValuesValidatesDates(t *testing.T) {
 		if got := macroValues(filters, map[string]string{"day": evil})["day"]; got != "" {
 			t.Errorf("非法日期 %q 应置空, got %q", evil, got)
 		}
+	}
+}
+
+// Validate: 只读静态校验, 不连库。合法 SELECT 无 issue; 写操作/堆叠被拒。
+func TestValidate(t *testing.T) {
+	if _, issues := Validate("SELECT day, amount FROM biz WHERE day >= '{d}';\n${d|日期|today|date}"); len(issues) != 0 {
+		t.Errorf("合法 SELECT 不应有 issue: %+v", issues)
+	}
+	// SELECT 块内夹带写操作 (stacked) -> 报 issue 并带 block_id。
+	_, issues := Validate("-- @id=bad\nSELECT 1; DROP TABLE biz;")
+	if len(issues) != 1 || issues[0].BlockID != "bad" {
+		t.Fatalf("堆叠写操作应被拒并带 block_id, got %+v", issues)
+	}
+	if _, issues := Validate("#!MARKDOWN\n# 标题\n#!END"); len(issues) != 0 {
+		t.Errorf("markdown 块不应报 SQL issue: %+v", issues)
 	}
 }
 

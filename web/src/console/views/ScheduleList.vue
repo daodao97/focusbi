@@ -3,7 +3,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { api } from '@/api'
-import { canWriteAnyReport, canWriteReport } from '@/perm'
+import { canWriteAnyReport } from '@/perm'
 import ScheduleForm from '../components/ScheduleForm.vue'
 
 const canManage = computed(() => canWriteAnyReport())
@@ -28,10 +28,8 @@ async function load() {
 async function loadReports() {
   try {
     const all = await api.listReports()
-    // 新建任务只能选用户有写权限的报表 (与后端 report.{id}:w 一致)。
-    const parents = {}
-    for (const x of all || []) parents[x.id] = x.parent_id
-    reports.value = (all || []).filter(r => r.type !== 'folder' && canWriteReport(r.id, parents))
+    // 新建任务只能选用户有写权限的报表; can_write 由后端统一计算。
+    reports.value = (all || []).filter(r => r.type !== 'folder' && r.can_write)
   } catch {
     reports.value = []
   }

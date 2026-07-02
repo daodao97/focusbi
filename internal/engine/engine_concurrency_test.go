@@ -88,15 +88,23 @@ func resultJSON(t *testing.T, r *Result) string {
 	return string(b)
 }
 
+func runWithQueryConcurrency(t *testing.T, n int, content string) (*Result, error) {
+	t.Helper()
+	old := conf.Get().Engine.QueryConcurrency
+	conf.Get().Engine.QueryConcurrency = n
+	defer func() { conf.Get().Engine.QueryConcurrency = old }()
+	return NewRunner("default").Run(content, nil)
+}
+
 // 并发 (8) 与串行 (1) 跑同一模板, 产出必须完全相同。
 func TestRunConcurrencyEquivalence(t *testing.T) {
 	setupSQLiteConcurrency(t)
 
-	serial, err := NewRunner("default").WithConcurrency(1).Run(mixedTemplate, nil)
+	serial, err := runWithQueryConcurrency(t, 1, mixedTemplate)
 	if err != nil {
 		t.Fatalf("serial Run: %v", err)
 	}
-	concurrent, err := NewRunner("default").WithConcurrency(8).Run(mixedTemplate, nil)
+	concurrent, err := runWithQueryConcurrency(t, 8, mixedTemplate)
 	if err != nil {
 		t.Fatalf("concurrent Run: %v", err)
 	}
@@ -126,11 +134,11 @@ func TestRunConcurrencyExceedsBlocks(t *testing.T) {
 	setupSQLiteConcurrency(t)
 	content := "SELECT day, pv FROM pv ORDER BY day;"
 
-	serial, err := NewRunner("default").WithConcurrency(1).Run(content, nil)
+	serial, err := runWithQueryConcurrency(t, 1, content)
 	if err != nil {
 		t.Fatalf("serial: %v", err)
 	}
-	concurrent, err := NewRunner("default").WithConcurrency(64).Run(content, nil)
+	concurrent, err := runWithQueryConcurrency(t, 64, content)
 	if err != nil {
 		t.Fatalf("concurrent: %v", err)
 	}
@@ -139,14 +147,14 @@ func TestRunConcurrencyExceedsBlocks(t *testing.T) {
 	}
 }
 
-// 默认 Runner (未 WithConcurrency) 走 conf 默认并发, 与显式串行产出一致。
+// 默认 Runner 走 conf 默认并发, 与显式串行产出一致。
 func TestRunDefaultConcurrencyEquivalence(t *testing.T) {
 	setupSQLiteConcurrency(t)
 	def, err := NewRunner("default").Run(mixedTemplate, nil)
 	if err != nil {
 		t.Fatalf("default Run: %v", err)
 	}
-	serial, err := NewRunner("default").WithConcurrency(1).Run(mixedTemplate, nil)
+	serial, err := runWithQueryConcurrency(t, 1, mixedTemplate)
 	if err != nil {
 		t.Fatalf("serial Run: %v", err)
 	}

@@ -5,7 +5,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { Document, Folder, MoreFilled, Hide } from '@element-plus/icons-vue'
 import { api } from '@/api'
 import { buildTree, folderOptions } from '@/tree'
-import { can, canWriteAnyReport, canWriteReport } from '@/perm'
+import { can, canWriteAnyReport } from '@/perm'
 import ReportTreeMenu from '../components/ReportTreeMenu.vue'
 import ReportEditor from '../components/ReportEditor.vue'
 
@@ -16,22 +16,23 @@ const treeRef = ref(null)
 // 是否报表开发者: 决定顶部 +文件夹/+报表 与拖拽是否可用。
 const canManage = computed(() => canWriteAnyReport())
 const canManageRoot = computed(() => can('report', 'w'))
-// id->parent 映射, 供逐节点写权限判定。
-const parents = computed(() => {
-  const m = {}
-  for (const x of flat.value) m[x.id] = x.parent_id
-  return m
-})
-// 能否写某具体节点 (report.<id>:w 或祖先文件夹递归), 决定该行的移动/删除/编辑入口。
-function canWriteNode(id) { return canWriteReport(id, parents.value) }
+// 能否写某具体节点由后端按 report.<id>:w / 祖先文件夹递归算好, 前端只消费结果。
+function canWriteNode(id) { return !!flat.value.find(x => x.id === id)?.can_write }
 
 const tree = computed(() => buildTree(flat.value))
 const folderOpts = computed(() => folderOptions(flat.value))
 
 // 拖拽放置规则: inner(放进节点内部) 仅当目标是文件夹; prev/next(同级排序) 始终允许。
+function allowDrag(node) {
+  return canWriteNode(node.data.id)
+}
+
 function allowDrop(draggingNode, dropNode, type) {
-  if (type === 'inner') return dropNode.data.type === 'folder'
-  return true
+  if (type === 'inner') {
+    return dropNode.data.type === 'folder' && canWriteNode(dropNode.data.id)
+  }
+  const parentId = dropNode.parent && dropNode.parent.data ? (dropNode.parent.data.id || 0) : 0
+  return parentId === 0 ? canManageRoot.value : canWriteNode(parentId)
 }
 
 // 拖拽结束: 计算受影响节点的新 parent_id + sort, 持久化。
@@ -178,7 +179,7 @@ onMounted(load)
       <el-tree
         ref="treeRef"
         :data="tree" node-key="id" default-expand-all :expand-on-click-node="false"
-        :draggable="canManage" :allow-drop="allowDrop" @node-drop="onDrop"
+        :draggable="canManage" :allow-drag="allowDrag" :allow-drop="allowDrop" @node-drop="onDrop"
         :props="{ label: 'name', children: 'children' }">
         <template #default="{ node, data }">
           <span class="tree-node" :class="{ active: selected === data.id }"

@@ -137,37 +137,6 @@ func applyDateModifier(t time.Time, mod string) time.Time {
 	return t
 }
 
-// phpFormatToGoLayout 把 PHP date 风格格式串转为 Go time 解析/格式化布局。
-// 例: "Y-m" -> "2006-01", "Y-m-d" -> "2006-01-02", "Y-m-d H:i:s" -> "2006-01-02 15:04:05"。
-func phpFormatToGoLayout(format string) string {
-	var sb strings.Builder
-	for _, r := range format {
-		switch r {
-		case 'Y':
-			sb.WriteString("2006")
-		case 'y':
-			sb.WriteString("06")
-		case 'm':
-			sb.WriteString("01")
-		case 'n':
-			sb.WriteString("1")
-		case 'd':
-			sb.WriteString("02")
-		case 'j':
-			sb.WriteString("2")
-		case 'H':
-			sb.WriteString("15")
-		case 'i':
-			sb.WriteString("04")
-		case 's':
-			sb.WriteString("05")
-		default:
-			sb.WriteRune(r)
-		}
-	}
-	return sb.String()
-}
-
 // formatDate 按 PHP date 风格 token 直接拼接输出 (避免 Go 参考时间布局冲突)。
 func formatDate(t time.Time, format string) string {
 	var sb strings.Builder

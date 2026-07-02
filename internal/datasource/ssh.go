@@ -203,11 +203,6 @@ func registerTunnelDialer(name, netName string) {
 	})
 }
 
-// dialViaTunnel 经当前 ssh client 转发到目标 addr。
-func dialViaTunnel(name, addr string) (net.Conn, error) {
-	return dialViaTunnelContext(context.Background(), name, addr)
-}
-
 func dialViaTunnelContext(ctx context.Context, name, addr string) (net.Conn, error) {
 	tunMu.Lock()
 	t := tunnels[name]

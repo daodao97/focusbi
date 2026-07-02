@@ -5,11 +5,8 @@ package datasource
 import (
 	"context"
 	"database/sql"
-	"database/sql/driver"
 	"errors"
 	"fmt"
-	"io"
-	"net"
 	"strings"
 	"sync"
 	"time"
@@ -19,9 +16,9 @@ import (
 
 	"github.com/daodao97/xgo/xdb"
 
-	mysqldriver "github.com/go-sql-driver/mysql" // mysql
-	_ "github.com/lib/pq"                        // postgres
-	_ "modernc.org/sqlite"                       // sqlite (纯 Go, 无需 CGO)
+	_ "github.com/go-sql-driver/mysql" // mysql
+	_ "github.com/lib/pq"              // postgres
+	_ "modernc.org/sqlite"             // sqlite (纯 Go, 无需 CGO)
 )
 
 // normalizeDriver 把用户填写的驱动名归一化为 database/sql 注册的驱动名。
@@ -155,30 +152,6 @@ func get(name string) (*sql.DB, error) {
 	return db, nil
 }
 
-// Ping 校验某数据源可连通。
-func Ping(name string) error {
-	db, err := get(name)
-	if err != nil {
-		return err
-	}
-	ctx, cancel := contextTimeout()
-	defer cancel()
-	return db.PingContext(ctx)
-}
-
-// PingDSN 在不写入配置的情况下, 测试一个临时 driver/dsn 是否可连通。
-func PingDSN(driver, dsn string) error {
-	driver = normalizeDriver(driver)
-	db, err := sql.Open(driver, dsn)
-	if err != nil {
-		return err
-	}
-	defer db.Close()
-	ctx, cancel := contextTimeout()
-	defer cancel()
-	return db.PingContext(ctx)
-}
-
 // PingRecord 测试一条 (尚未保存的) 数据源记录是否可连通, 支持 ssh 隧道。
 func PingRecord(r *dao.DsnRecord) error {
 	driver := normalizeDriver(r.Driver)
@@ -228,7 +201,7 @@ func Invalidate(name string) {
 //   - 隧道侧自愈: 新连接经 registerTunnelDialer 拨号, 若 ssh client 失效会自动
 //     reconnectTunnel 重建 (见 ssh.go)。
 //
-// 早期版本在这里 isBadConnErr -> Invalidate(name) -> 重试, 会关闭【多个并发查询
+// 早期版本在这里判断坏连接 -> Invalidate(name) -> 重试, 会关闭【多个并发查询
 // 共用】的整个 *sql.DB 池与隧道, 把正在用该池的其它并发查询连带打断 (unexpected
 // EOF), 并触发 Invalidate 正反馈雪崩。并发预取上线后暴露, 故移除。
 func Query(name, query string, args ...any) (*QueryResult, error) {
@@ -305,28 +278,6 @@ func formatDurationCN(d time.Duration) string {
 		return fmt.Sprintf("%d秒", int(sec))
 	}
 	return d.String()
-}
-
-// isBadConnErr 判断错误是否为连接层失效 (值得失效缓存并重试)。
-func isBadConnErr(err error) bool {
-	if err == nil {
-		return false
-	}
-	if errors.Is(err, driver.ErrBadConn) || errors.Is(err, mysqldriver.ErrInvalidConn) ||
-		errors.Is(err, io.EOF) || errors.Is(err, net.ErrClosed) {
-		return true
-	}
-	msg := strings.ToLower(err.Error())
-	for _, kw := range []string{
-		"invalid connection", "unexpected eof", "broken pipe",
-		"connection reset", "use of closed network connection", "bad connection",
-		"eof",
-	} {
-		if strings.Contains(msg, kw) {
-			return true
-		}
-	}
-	return false
 }
 
 // normalize 把 driver 返回的 []byte 转成字符串, 其它类型原样保留。

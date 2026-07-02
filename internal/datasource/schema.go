@@ -10,7 +10,16 @@ type Column struct {
 	Name    string `json:"name"`
 	Type    string `json:"type"`
 	Comment string `json:"comment,omitempty"`
+	// Samples 是该列的若干去重样例值 (best-effort), 供 AI 判断枚举取值/日期粒度/口径。
+	// 采样失败或无数据时为空。
+	Samples []string `json:"samples,omitempty"`
 }
+
+// sampleRowLimit 采样时扫描的行数; sampleValueLimit 每列保留的去重样例数。
+const (
+	sampleRowLimit   = 30
+	sampleValueLimit = 5
+)
 
 // mysqlSysDBs 是 mysql 的系统库, 列举数据库时过滤掉。
 var mysqlSysDBs = map[string]bool{
@@ -119,6 +128,66 @@ func TableColumns(name, db, table string) ([]Column, error) {
 		return sqliteColumns(name, table)
 	default:
 		return mysqlColumns(name, db, table)
+	}
+}
+
+// TableColumnsWithSamples 在 TableColumns 基础上, 用一条 SELECT * LIMIT N 采样,
+// 为每列填充去重样例值。采样失败 (无权/空表等) 不影响列定义返回, 仅样例为空。
+func TableColumnsWithSamples(name, db, table string) ([]Column, error) {
+	cols, err := TableColumns(name, db, table)
+	if err != nil {
+		return nil, err
+	}
+	if len(cols) == 0 {
+		return cols, nil
+	}
+
+	driver, _, _, err := resolve(name)
+	if err != nil {
+		return cols, nil // 列定义已拿到, 采样失败就算了
+	}
+	ref := quoteTableRef(normalizeDriver(driver), db, table)
+	res, err := Query(name, fmt.Sprintf("SELECT * FROM %s LIMIT %d", ref, sampleRowLimit))
+	if err != nil || res == nil {
+		return cols, nil
+	}
+
+	// 逐列收集去重、非空样例值 (保序)。
+	for i := range cols {
+		seen := map[string]bool{}
+		var samples []string
+		for _, row := range res.Rows {
+			v := str(row[cols[i].Name])
+			if v == "" || seen[v] {
+				continue
+			}
+			seen[v] = true
+			samples = append(samples, v)
+			if len(samples) >= sampleValueLimit {
+				break
+			}
+		}
+		cols[i].Samples = samples
+	}
+	return cols, nil
+}
+
+// quoteTableRef 按驱动给出安全的表引用 (db/table 已经过 validIdent 校验)。
+func quoteTableRef(driver, db, table string) string {
+	switch driver {
+	case "postgres":
+		schema := db
+		if schema == "" {
+			schema = "public"
+		}
+		return `"` + schema + `"."` + table + `"`
+	case "sqlite":
+		return `"` + table + `"`
+	default: // mysql
+		if db != "" {
+			return "`" + db + "`.`" + table + "`"
+		}
+		return "`" + table + "`"
 	}
 }
 

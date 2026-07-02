@@ -14,6 +14,7 @@ import (
 	"xproxy/internal/datasource"
 	"xproxy/internal/engine"
 
+	"github.com/daodao97/xgo/xapp"
 	"github.com/daodao97/xgo/xdb"
 	"github.com/daodao97/xgo/xlog"
 	"github.com/gin-gonic/gin"
@@ -122,7 +123,22 @@ func ok(c *gin.Context, data any) {
 	c.JSON(http.StatusOK, gin.H{"code": 0, "data": data})
 }
 
+// devEnv 判定是否 dev 环境; 用函数变量便于测试覆写。默认读 xapp.IsDev(), 它以
+// xapp.Args.AppEnv 为准 —— 同时覆盖 --app-env 标志与 APP_ENV 环境变量 (与 cmd/main.go 一致),
+// 避免只认环境变量导致 `--app-env dev` 下 5xx 被误泛化。
+var devEnv = xapp.IsDev
+
+// fail 统一错误出口。4xx (客户端/业务错误, 如"报表不存在"/参数非法) 的 msg 面向用户、可控,
+// 原样返回; 5xx (内部错误, msg 常为 DB/连接原文) 会泄露主机/库名/连接细节, 故生产环境记日志
+// 后返回泛化文案, 仅 dev 透出原文。
 func fail(c *gin.Context, status int, msg string) {
+	if status >= http.StatusInternalServerError && !devEnv() {
+		xlog.Error("api internal error",
+			xlog.String("path", c.FullPath()),
+			xlog.Int("status", status),
+			xlog.String("detail", msg))
+		msg = "服务器内部错误, 请稍后重试"
+	}
 	c.JSON(status, gin.H{"code": 1, "msg": msg})
 }
 
@@ -319,11 +335,6 @@ func approveReportDSNs(reportID int, settings string, dsns []string) error {
 
 // ---- Report ----
 
-// reportReadable 复用 auth 包的祖先链判权 (api 与 mcpserver 共用同一逻辑)。
-func reportReadable(p *auth.Permission, id int, parents map[int]int, mode string) bool {
-	return p.ReportReadable(id, parents, mode)
-}
-
 // loadParentMap 取 id->parent_id 映射 + 报表全量列表 (用于祖先链判权与树过滤)。
 func loadParentMap() (map[int]int, []*dao.ReportRecord, error) {
 	list, err := dao.ListReports()
@@ -337,41 +348,27 @@ func loadParentMap() (map[int]int, []*dao.ReportRecord, error) {
 	return parents, list, nil
 }
 
-// canReadReport 判断当前用户能否读某报表 (含祖先文件夹递归授权)。
-func canReadReport(c *gin.Context, id int) bool {
+func canReport(c *gin.Context, id int, mode string) bool {
 	parents, _, err := loadParentMap()
 	if err != nil {
 		return false
 	}
-	return reportReadable(auth.PermOf(c), id, parents, "r")
+	return auth.PermOf(c).ReportReadable(id, parents, mode)
 }
 
-// canWriteReport 判断当前用户能否写某报表 (report.<id>:w 或祖先文件夹递归 Rw)。
-// 与 canReadReport 对称, 是报表写权限的唯一判据。
-func canWriteReport(c *gin.Context, id int) bool {
-	parents, _, err := loadParentMap()
-	if err != nil {
+func requireReportPerm(c *gin.Context, id int, mode, msg string) bool {
+	if !canReport(c, id, mode) {
+		fail(c, http.StatusForbidden, msg)
 		return false
 	}
-	return reportReadable(auth.PermOf(c), id, parents, "w")
+	return true
 }
 
-// requireReportWrite 校验写权限, 无则写 403 并返回 false。
 func requireReportWrite(c *gin.Context, id int) bool {
-	if !canWriteReport(c, id) {
-		fail(c, http.StatusForbidden, "无权修改该报表")
-		return false
-	}
-	return true
+	return requireReportPerm(c, id, "w", "无权修改该报表")
 }
-
-// requireReportRead 校验读权限, 无则写 403 并返回 false。
 func requireReportRead(c *gin.Context, id int) bool {
-	if !canReadReport(c, id) {
-		fail(c, http.StatusForbidden, "无权访问该报表")
-		return false
-	}
-	return true
+	return requireReportPerm(c, id, "r", "无权访问该报表")
 }
 
 func requireRootReportWrite(c *gin.Context) bool {
@@ -405,11 +402,17 @@ func requireWritableParent(c *gin.Context, parentID int) bool {
 		fail(c, http.StatusBadRequest, "父级不存在或不是文件夹")
 		return false
 	}
-	if !reportReadable(auth.PermOf(c), parentID, parents, "w") {
+	if !auth.PermOf(c).ReportReadable(parentID, parents, "w") {
 		fail(c, http.StatusForbidden, "无权在该目录下操作报表")
 		return false
 	}
 	return true
+}
+
+type reportViewRecord struct {
+	*dao.ReportRecord
+	CanRead  bool `json:"can_read,omitempty"`
+	CanWrite bool `json:"can_write,omitempty"`
 }
 
 func listReports(c *gin.Context) {
@@ -421,9 +424,13 @@ func listReports(c *gin.Context) {
 	p := auth.PermOf(c)
 	// 先标记每个可直接读的节点
 	readable := make(map[int]bool, len(list))
+	writable := make(map[int]bool, len(list))
 	for _, r := range list {
-		if reportReadable(p, r.Id, parents, "r") {
+		if p.ReportReadable(r.Id, parents, "r") {
 			readable[r.Id] = true
+		}
+		if p.ReportReadable(r.Id, parents, "w") {
+			writable[r.Id] = true
 		}
 	}
 	// 文件夹: 若其任一后代可读, 则文件夹也需返回 (否则树断链)
@@ -432,10 +439,10 @@ func listReports(c *gin.Context) {
 			readable[r.Id] = true
 		}
 	}
-	filtered := make([]*dao.ReportRecord, 0, len(list))
+	filtered := make([]reportViewRecord, 0, len(list))
 	for _, r := range list {
 		if readable[r.Id] {
-			filtered = append(filtered, r)
+			filtered = append(filtered, reportViewRecord{ReportRecord: r, CanRead: readable[r.Id], CanWrite: writable[r.Id]})
 		}
 	}
 	ok(c, filtered)
@@ -462,8 +469,7 @@ func getReport(c *gin.Context) {
 	if !valid {
 		return
 	}
-	if !canReadReport(c, id) {
-		fail(c, http.StatusForbidden, "无权访问该报表")
+	if !requireReportRead(c, id) {
 		return
 	}
 	r, err := dao.GetReportByID(id)
@@ -475,7 +481,7 @@ func getReport(c *gin.Context) {
 		fail(c, http.StatusInternalServerError, err.Error())
 		return
 	}
-	ok(c, r)
+	ok(c, reportViewRecord{ReportRecord: r, CanRead: true, CanWrite: canReport(c, id, "w")})
 }
 
 func createReport(c *gin.Context) {
@@ -728,7 +734,7 @@ func reorderReports(c *gin.Context) {
 	// (移动到根目录需全局 report:w), 否则报表开发者可把无权报表移进/移出自己的目录。
 	p := auth.PermOf(c)
 	for _, it := range req.Items {
-		if !reportReadable(p, it.ID, origParents, "w") {
+		if !p.ReportReadable(it.ID, origParents, "w") {
 			fail(c, http.StatusForbidden, "无权移动该报表")
 			return
 		}
@@ -736,7 +742,7 @@ func reorderReports(c *gin.Context) {
 			if !requireRootReportWrite(c) {
 				return
 			}
-		} else if !reportReadable(p, it.ParentID, origParents, "w") {
+		} else if !p.ReportReadable(it.ParentID, origParents, "w") {
 			fail(c, http.StatusForbidden, "无权移动到该目标目录")
 			return
 		}
@@ -791,8 +797,7 @@ func runReport(c *gin.Context) {
 	if !valid {
 		return
 	}
-	if !canReadReport(c, id) {
-		fail(c, http.StatusForbidden, "无权访问该报表")
+	if !requireReportRead(c, id) {
 		return
 	}
 	r, err := dao.GetReportByID(id)

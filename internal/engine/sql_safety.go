@@ -10,6 +10,9 @@ var forbiddenSQLTokens = map[string]bool{
 	"insert": true, "update": true, "delete": true, "merge": true, "replace": true,
 	"drop": true, "alter": true, "create": true, "truncate": true,
 	"grant": true, "revoke": true, "call": true, "execute": true, "exec": true,
+	// 文件读写向量: SELECT ... INTO OUTFILE/DUMPFILE '/path' 是单条 SELECT, 关键字校验挡不住;
+	// LOAD_FILE() 读服务器文件。into 在只读报表里无正当用途 (真列名会被引号包裹而跳过分词)。
+	"into": true, "outfile": true, "dumpfile": true, "load_file": true,
 }
 
 // validateReadOnlySQL enforces the report SQL contract: a block/query may only

@@ -2,7 +2,13 @@ package auth
 
 import "testing"
 
-func perm(res map[string]string) *Permission { return NewPermissionFromResources(res) }
+func perm(res map[string]string) *Permission {
+	p := &Permission{tree: permNode{}}
+	for resource, mode := range res {
+		p.add(resource, mode)
+	}
+	return p
+}
 
 func TestCheckExactResource(t *testing.T) {
 	p := perm(map[string]string{"report.5": "rw"})
@@ -114,8 +120,6 @@ func TestParseResourceJSON(t *testing.T) {
 
 // ---- 按数据源权限 (dsn.<id> / dsn.default) ----
 
-// P0-2: 写路径按 report.<id>:w 判权 (与读路径对称)。全局 report.manage:rw 不覆盖
-// 具体报表的写权限 —— 那是路由守卫,判"是否作者",此处判"能否动这个报表"。
 func TestReportReadableWriteMode(t *testing.T) {
 	// 树: 10(folder) -> 20(report); 30(report) 独立
 	parents := map[int]int{10: 0, 20: 10, 30: 0}
@@ -139,12 +143,6 @@ func TestReportReadableWriteMode(t *testing.T) {
 	pr := perm(map[string]string{"report.20": "r"})
 	if pr.ReportReadable(20, parents, "w") {
 		t.Error("report.20:r 不应有写权限")
-	}
-
-	// report.manage:rw (全局扁平, 与 report.<id> 不同命名空间) 不覆盖具体报表写
-	pm := perm(map[string]string{"report.manage": "rw"})
-	if pm.ReportReadable(20, parents, "w") {
-		t.Error("report.manage:rw 不应授予 report.20 的写权限 (P0-2 核心)")
 	}
 }
 

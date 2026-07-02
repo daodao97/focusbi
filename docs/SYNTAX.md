@@ -37,7 +37,7 @@ GROUP BY channel;
 要点：
 - 过滤器写在前面 (`${...}`)，提供给前端渲染输入控件，并在 SQL 里以宏 `{name}` 引用。
 - 每条以 `;` 结尾的 SQL 是一个**表格区块**；区块前的 `-- @key=value` 行是该区块的注解。
-- SQL 区块只允许单条只读 `SELECT` / `WITH` 查询；`INSERT` / `UPDATE` / `DELETE` / DDL 等写操作会被拒绝。
+- SQL 区块只允许单条只读 `SELECT` / `WITH` 查询；`INSERT` / `UPDATE` / `DELETE` / DDL 及 `INTO OUTFILE` / `LOAD_FILE` 等文件读写会被拒绝。
 - `date_range` 过滤器展开为 `{from_range}` / `{to_range}` 两个宏。
 - `-- {?channel}` 行尾条件：`channel` 为空时删除该行 (动态过滤)。
 
@@ -55,8 +55,9 @@ GROUP BY channel;
 > 判定顺序：`#!SCRIPT` → `#!MARKDOWN` → `#!RAW` → `SELECT`/`WITH` → 空区块跳过 → 其余
 > 一律按 markdown 渲染。所以普通中文说明文字直接写在区块里即可, 不必加 `#!MARKDOWN`。
 
-> SQL 区块和脚本 `query()` 都只执行只读查询。即使以 `WITH` 开头, 只要包含 `DELETE` /
-> `UPDATE` / `INSERT` / DDL 等写操作关键字也会被拒绝。
+> SQL 区块、脚本 `query()`、以及 `enum_sql(...)` 选项查询都只执行只读查询。即使以 `WITH`
+> 开头, 只要包含 `DELETE` / `UPDATE` / `INSERT` / DDL, 或 `INTO OUTFILE` / `DUMPFILE` /
+> `LOAD_FILE` 等文件读写向量, 都会被拒绝。
 
 > **重点 — `#!MARKDOWN` / `#!RAW` 要用 `#!END` 收尾**：这两类区块没有 `;` 结尾, 引擎靠
 > `#!END` 知道它在哪结束。**当它后面还有 SQL 区块时, 不写 `#!END` 会把后续 SQL 也吞进

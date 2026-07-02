@@ -85,9 +85,10 @@ bearer_token_env_var = "FOCUSBI_TOKEN"
 | `list_reports` | 列出你有读权限的报表与文件夹 | 报表读 |
 | `get_report` | 读取单个报表的模板 (开发版/发布版) 与元信息 | 报表读 |
 | `list_datasources` | 列出你可用的数据源 (脱敏, 不含连接串/密钥) | 数据源读 |
-| `list_databases` / `list_tables` / `describe_table` | 探数据源的库 / 表 / 列定义 | 数据源读 |
+| `list_databases` / `list_tables` | 探数据源的库 / 表 | 数据源读 |
+| `describe_table` | 查看表的列定义 + 每列去重样例值 (判断枚举取值/日期粒度) | 数据源读 |
 | `query_raw` | 只读 SELECT 探数据 (拒非 SELECT / 多语句, 限 200 行) | 数据源读 |
-| `preview_template` | 试跑一段模板返回结构化结果 (含每块错误), 不落库 | 报表写 (任一) |
+| `preview_template` | 试跑模板返回结构化结果, 出错区块带分类+修正建议; 传 `validate_only` 只校验不连库 | 报表写 (任一) |
 | `create_report` | 创建报表或文件夹 | 父级写 / 根建需全局 `report:w` |
 | `update_report` | 更新报表的开发版草稿 / 名称 / 数据源 / 设置 | 该报表写 |
 | `publish_report` | 把开发版草稿发布为正式版 (并记录版本快照) | 该报表写 |

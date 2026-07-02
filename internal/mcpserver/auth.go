@@ -86,11 +86,6 @@ func resolveUserID(token string) (int, time.Time, error) {
 	return claims.UID, time.Now().Add(sessionWindow), nil
 }
 
-// withPrincipal 在 ctx 上挂载已解析的用户 + 权限。
-func withPrincipal(ctx context.Context, p *principal) context.Context {
-	return context.WithValue(ctx, ctxUserKey{}, p)
-}
-
 // principalFromContext 从 ctx 取出调用者的用户 + 权限。
 // SDK 已在 ctx 放入 TokenInfo(含 UserID); 这里据此加载 user 并编译权限, 结果缓存到 ctx。
 func principalFromContext(ctx context.Context) (*principal, error) {

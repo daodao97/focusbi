@@ -108,14 +108,24 @@ type queryRawOut struct {
 }
 
 type previewIn struct {
-	DSN     string            `json:"dsn" jsonschema:"数据源名称 (留空用 default)"`
-	Content string            `json:"content" jsonschema:"待试跑的报表模板"`
-	Params  map[string]string `json:"params,omitempty" jsonschema:"过滤器取值 (可选)"`
+	DSN          string            `json:"dsn" jsonschema:"数据源名称 (留空用 default)"`
+	Content      string            `json:"content" jsonschema:"待试跑的报表模板"`
+	Params       map[string]string `json:"params,omitempty" jsonschema:"过滤器取值 (可选)"`
+	ValidateOnly bool              `json:"validate_only,omitempty" jsonschema:"只做解析+语法校验, 不连库执行 (快速迭代模板结构时用)"`
+}
+
+// blockError 是 preview 里出错区块的分类诊断, 帮 AI 定位是哪类错误、怎么改。
+type blockError struct {
+	BlockID string `json:"block_id,omitempty"`
+	Kind    string `json:"kind" jsonschema:"错误类别: sql / template / chart / script / unknown"`
+	Message string `json:"message" jsonschema:"原始错误信息"`
+	Hint    string `json:"hint,omitempty" jsonschema:"针对该类错误的修正建议"`
 }
 
 type previewOut struct {
 	Filters []engine.FilterDef `json:"filters"`
-	Blocks  []engine.Block     `json:"blocks" jsonschema:"各区块结果; 区块的 error 字段非空表示该块 SQL/脚本出错"`
+	Blocks  []engine.Block     `json:"blocks" jsonschema:"各区块结果; 区块的 error 字段非空表示该块出错"`
+	Errors  []blockError       `json:"errors,omitempty" jsonschema:"出错区块的分类诊断与修正建议 (为空表示全部成功)"`
 }
 
 type createReportIn struct {
@@ -176,7 +186,7 @@ func registerTools(s *mcp.Server) {
 		listTablesTool)
 
 	mcp.AddTool(s, &mcp.Tool{Name: "describe_table",
-		Description: "查看表的列定义 (名称/类型/注释)。需 dsn 读权限。"},
+		Description: "查看表的列定义 (名称/类型/注释) 及每列若干去重样例值 (判断枚举取值/日期粒度/口径)。需 dsn 读权限。"},
 		describeTableTool)
 
 	mcp.AddTool(s, &mcp.Tool{Name: "query_raw",
@@ -184,7 +194,7 @@ func registerTools(s *mcp.Server) {
 		queryRawTool)
 
 	mcp.AddTool(s, &mcp.Tool{Name: "preview_template",
-		Description: "试跑一段报表模板并返回结构化结果 (含每个区块的错误), 不落库。用于校验模板。需报表写权限。"},
+		Description: "试跑一段报表模板并返回结构化结果, 不落库。出错区块在 errors 里带分类与修正建议。传 validate_only=true 只做语法校验不连库 (快速迭代结构)。需报表写权限。"},
 		previewTemplateTool)
 
 	mcp.AddTool(s, &mcp.Tool{Name: "create_report",
@@ -306,7 +316,7 @@ func describeTableTool(ctx context.Context, _ *mcp.CallToolRequest, in describeT
 	if err := requireDsnReadByName(ctx, in.DSN); err != nil {
 		return nil, describeTableOut{}, err
 	}
-	cols, err := datasource.TableColumns(in.DSN, in.DB, in.Table)
+	cols, err := datasource.TableColumnsWithSamples(in.DSN, in.DB, in.Table)
 	if err != nil {
 		return nil, describeTableOut{}, err
 	}
@@ -348,6 +358,20 @@ func previewTemplateTool(ctx context.Context, _ *mcp.CallToolRequest, in preview
 	if !pr.perm.CanWriteAnyReport() {
 		return nil, previewOut{}, fmt.Errorf("无权试跑模板 (需报表写权限)")
 	}
+
+	// validate_only: 只解析 + 只读校验, 不连库、不校验数据源权限 (无库交互)。
+	if in.ValidateOnly {
+		filters, issues := engine.Validate(in.Content)
+		out := previewOut{Filters: filters}
+		for _, is := range issues {
+			out.Errors = append(out.Errors, blockError{
+				BlockID: is.BlockID, Kind: "sql", Message: is.Message,
+				Hint: classifyHint("sql", is.Message),
+			})
+		}
+		return nil, out, nil
+	}
+
 	nameToID, err := auth.LoadDsnNameToID()
 	if err != nil {
 		return nil, previewOut{}, err
@@ -358,7 +382,65 @@ func previewTemplateTool(ctx context.Context, _ *mcp.CallToolRequest, in preview
 	if err != nil {
 		return nil, previewOut{}, err
 	}
-	return nil, previewOut{Filters: result.Filters, Blocks: result.Blocks}, nil
+	out := previewOut{Filters: result.Filters, Blocks: result.Blocks}
+	for _, b := range result.Blocks {
+		if b.Error == "" {
+			continue
+		}
+		kind := classifyBlockError(b.Type, b.Error)
+		out.Errors = append(out.Errors, blockError{
+			BlockID: b.ID, Kind: kind, Message: b.Error, Hint: classifyHint(kind, b.Error),
+		})
+	}
+	return nil, out, nil
+}
+
+// classifyBlockError 依据区块类型与错误文本粗分类, 供 AI 快速定位。
+func classifyBlockError(blockType, msg string) string {
+	if blockType == "markdown" || blockType == "raw" {
+		return "template"
+	}
+	low := strings.ToLower(msg)
+	switch {
+	case strings.Contains(low, "chart") || strings.Contains(low, "图表"):
+		return "chart"
+	case strings.Contains(low, "script") || strings.Contains(low, "脚本") || strings.Contains(low, "goja"):
+		return "script"
+	case strings.Contains(low, "sql") || strings.Contains(low, "syntax") ||
+		strings.Contains(low, "column") || strings.Contains(low, "table") ||
+		strings.Contains(low, "unknown") || strings.Contains(low, "near "):
+		return "sql"
+	default:
+		return "unknown"
+	}
+}
+
+// classifyHint 给出针对错误类别的一句修正建议。
+func classifyHint(kind, msg string) string {
+	low := strings.ToLower(msg)
+	switch kind {
+	case "sql":
+		switch {
+		case strings.Contains(low, "unknown column"):
+			return "列名不存在: 用 describe_table 核对列名, 或检查是否漏写表别名。"
+		case strings.Contains(low, "unknown") && strings.Contains(low, "table"):
+			return "表不存在: 用 list_tables 核对表名与所属库。"
+		case strings.Contains(low, "只读") || strings.Contains(low, "read-only") || strings.Contains(low, "forbidden"):
+			return "报表模板只允许只读 SELECT; 移除写操作或多语句。"
+		case strings.Contains(low, "syntax") || strings.Contains(low, "near "):
+			return "SQL 语法错误: 检查宏 {name} 是否已正确闭合、是否缺少引号或逗号。"
+		default:
+			return "检查 SQL 是否针对该数据源方言合法; 可先用 query_raw 单独验证。"
+		}
+	case "template":
+		return "模板语法问题: 用 get_syntax_doc 核对注解 (-- @key=value) 与区块标记写法。"
+	case "chart":
+		return "图表配置问题: 核对 @chart 引用的列名确实出现在该区块 SELECT 结果中。"
+	case "script":
+		return "脚本执行出错: 检查 #!SCRIPT 块的 JS 语法与 query()/where() 用法。"
+	default:
+		return ""
+	}
 }
 
 func createReportTool(ctx context.Context, _ *mcp.CallToolRequest, in createReportIn) (*mcp.CallToolResult, idOut, error) {
@@ -473,7 +555,6 @@ func reportEditURL(r *dao.ReportRecord) string {
 }
 
 // requireReportWrite 校验调用者对某报表有写权限 (report.<id>:w 或祖先文件夹递归 Rw)。
-// 与 REST 侧 canWriteReport 对称。
 func requireReportWrite(pr *principal, id int) error {
 	parents, err := auth.LoadReportParents()
 	if err != nil {

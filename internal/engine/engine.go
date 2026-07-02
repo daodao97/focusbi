@@ -39,9 +39,7 @@ type Runner struct {
 	// authz 在执行触达某数据源前校验调用者权限 (按实际 dsn 名)。
 	// nil 表示不校验 (公开分享 / 定时任务等已预授权的入口)。
 	authz func(dsn string) error
-	// concurrency 独立 SQL 区块的并发预取数。<=0 时 Run 取 conf 默认值。
-	concurrency int
-	trace       RunTraceFunc
+	trace RunTraceFunc
 }
 
 func NewRunner(defaultDSN string) *Runner {
@@ -66,14 +64,6 @@ func (r *Runner) WithAuthz(fn func(dsn string) error) *Runner {
 	return &cp
 }
 
-// WithConcurrency 返回一个指定 SQL 区块并发预取数的 Runner 副本 (主要供测试覆写)。
-// n<=0 时 Run 回退到 conf 配置 (默认 8)。
-func (r *Runner) WithConcurrency(n int) *Runner {
-	cp := *r
-	cp.concurrency = n
-	return &cp
-}
-
 // WithTrace 返回一个带执行计时回调的 Runner 副本。
 func (r *Runner) WithTrace(fn RunTraceFunc) *Runner {
 	cp := *r
@@ -81,11 +71,45 @@ func (r *Runner) WithTrace(fn RunTraceFunc) *Runner {
 	return &cp
 }
 
-// Parse 仅解析过滤器, 不执行 SQL —— 用于前端首次渲染输入控件。
-func Parse(content string) []FilterDef {
-	filters, _ := parseFilters(content)
+// ValidationIssue 是一次静态校验发现的问题。
+type ValidationIssue struct {
+	BlockIndex int    `json:"block_index"` // 1-based 区块序号
+	BlockID    string `json:"block_id,omitempty"`
+	Message    string `json:"message"`
+}
+
+// Validate 只做解析 + 只读 SQL 静态校验, 不连库执行。
+// 返回 (过滤器, 问题列表)。用于 AI 快速迭代模板结构而不消耗数据库连接。
+// 检查项: SQL 区块经默认过滤值宏替换后是否为合法只读单语句 (堆叠/写关键字会被拒)。
+func Validate(content string) ([]FilterDef, []ValidationIssue) {
+	filters, cleaned := parseFilters(content)
 	resolveDefaults(filters)
-	return filters
+	macros := macroValues(filters, nil) // 用默认值展开宏
+
+	var issues []ValidationIssue
+	idx := 0
+	for _, raw := range splitBlocks(cleaned) {
+		if strings.TrimSpace(raw) == "" {
+			continue
+		}
+		idx++
+		rb := parseBlock(raw)
+		if rb.kind != "sql" {
+			continue
+		}
+		sql := strings.TrimSpace(applyMacros(rb.body, macros))
+		if sql == "" {
+			continue // 行级条件宏可能把整块置空, 非错误
+		}
+		if err := validateReadOnlySQL(sql); err != nil {
+			issues = append(issues, ValidationIssue{
+				BlockIndex: idx,
+				BlockID:    annotationString(rb, "id"),
+				Message:    err.Error(),
+			})
+		}
+	}
+	return filters, issues
 }
 
 // Run 解析并执行报表, params 为用户提交的过滤器取值。
@@ -372,10 +396,7 @@ func (r *Runner) prefetchSQL(parsed []*rawBlock, macros map[string]string) []*sq
 		return out
 	}
 
-	n := r.concurrency
-	if n <= 0 {
-		n = conf.Get().QueryConcurrency()
-	}
+	n := conf.Get().QueryConcurrency()
 	if n > len(jobs) {
 		n = len(jobs)
 	}

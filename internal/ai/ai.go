@@ -8,7 +8,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"regexp"
 	"strings"
 	"time"
 
@@ -138,17 +137,6 @@ func buildMessages(history []Turn, current, instruction, schema string) []Messag
 	fmt.Fprintf(&sb, "当前模板:\n```\n%s\n```\n\n修改要求: %s", current, instruction)
 	msgs = append(msgs, Message{Role: "user", Content: sb.String()})
 	return msgs
-}
-
-var fenceRe = regexp.MustCompile("(?s)^```[a-zA-Z]*\\n(.*)\\n```$")
-
-// stripCodeFence 去掉模型可能附加的 ``` 代码块包裹。
-func stripCodeFence(s string) string {
-	s = strings.TrimSpace(s)
-	if m := fenceRe.FindStringSubmatch(s); m != nil {
-		return strings.TrimSpace(m[1])
-	}
-	return s
 }
 
 func patchFromToolCalls(calls []ToolCall) (string, bool) {

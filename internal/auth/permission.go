@@ -185,15 +185,6 @@ func NewPermission(u *dao.UserRecord) (*Permission, error) {
 	return p, nil
 }
 
-// NewPermissionFromResources 直接用一组 resource map 构建 (用于转委校验/测试)。
-func NewPermissionFromResources(resources map[string]string) *Permission {
-	p := &Permission{tree: permNode{}}
-	for res, mode := range resources {
-		p.add(res, mode)
-	}
-	return p
-}
-
 // IsAdmin 是否超管。
 func (p *Permission) IsAdmin() bool { return p.isAdmin }
 

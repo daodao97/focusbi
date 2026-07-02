@@ -80,21 +80,6 @@ export function canWriteAnyReport() {
   return false
 }
 
-// canWriteReport: 能否写某具体报表 (report.<id>:w 或祖先文件夹递归 Rw)。
-// parents 为 { id -> parentId } 映射; 与后端 ReportReadable(id, parents, "w") 对齐。
-export function canWriteReport(id, parents = {}) {
-  if (can('report.' + id, 'w')) return true
-  const seen = { [id]: true }
-  let cur = parents[id]
-  while (cur && !seen[cur]) {
-    seen[cur] = true
-    if (can('report.' + cur, 'w')) return true
-    cur = parents[cur]
-  }
-  return false
-}
-// 全局数据源读 (覆盖所有源)
-export const canReadAnyDsn = () => can('dsn', 'r')
 // 某具体数据源是否可读: 全局 dsn:r 覆盖一切; 否则按 dsn.<id> / dsn.default 判定。
 export const canReadDsnById = (id) => {
   if (can('dsn', 'r')) return true

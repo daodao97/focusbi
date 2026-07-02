@@ -85,7 +85,7 @@ func listAllSchedules(c *gin.Context) {
 	p := auth.PermOf(c)
 	out := make([]scheduleView, 0, len(subs))
 	for _, s := range subs {
-		if !reportReadable(p, s.ReportID, parents, "w") {
+		if !p.ReportReadable(s.ReportID, parents, "w") {
 			continue // 无权写该报表 -> 不泄露其调度信息
 		}
 		out = append(out, scheduleView{

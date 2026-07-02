@@ -1,6 +1,7 @@
 package datasource
 
 import (
+	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"database/sql"
@@ -175,11 +176,22 @@ func itoa(p uint32) string {
 // 让 binary 包被引用 (Unmarshal 内部已处理, 这里仅保证导入不被裁剪的占位).
 var _ = binary.BigEndian
 
+func pingDSN(driver, dsn string) error {
+	db, err := sql.Open(normalizeDriver(driver), dsn)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	ctx, cancel := contextTimeout()
+	defer cancel()
+	return db.PingContext(ctx)
+}
+
 // TestSSHTunnelPing 验证: 经 SSH 跳板机转发到本地 MySQL 的 PingRecord 能成功。
 // 需要本地 127.0.0.1:3306 有可用 MySQL (root:root). 不可用时跳过。
 func TestSSHTunnelPing(t *testing.T) {
 	// 先确认本地 MySQL 直连可用, 否则跳过 (隧道目标不存在无法验证)。
-	if err := PingDSN("mysql", "root:root@tcp(127.0.0.1:3306)/?timeout=3s"); err != nil {
+	if err := pingDSN("mysql", "root:root@tcp(127.0.0.1:3306)/?timeout=3s"); err != nil {
 		t.Skipf("本地 MySQL 不可用, 跳过 SSH 隧道测试: %v", err)
 	}
 
@@ -206,7 +218,7 @@ func TestSSHTunnelPing(t *testing.T) {
 // 这是 "unexpected EOF" 回归测试: ssh 通道连接不支持 SetDeadline,
 // 若不包装为 no-op, mysql 驱动会在查询时把连接判为损坏。
 func TestSSHTunnelQuery(t *testing.T) {
-	if err := PingDSN("mysql", "root:root@tcp(127.0.0.1:3306)/?timeout=3s"); err != nil {
+	if err := pingDSN("mysql", "root:root@tcp(127.0.0.1:3306)/?timeout=3s"); err != nil {
 		t.Skipf("本地 MySQL 不可用, 跳过: %v", err)
 	}
 
@@ -244,7 +256,7 @@ func TestSSHTunnelQuery(t *testing.T) {
 // TestSSHTunnelReconnect 验证: ssh client 断开后, 下一次拨号能自动重连并成功。
 // 模拟跳板机空闲断线 / 网络抖动后的自愈。
 func TestSSHTunnelReconnect(t *testing.T) {
-	if err := PingDSN("mysql", "root:root@tcp(127.0.0.1:3306)/?timeout=3s"); err != nil {
+	if err := pingDSN("mysql", "root:root@tcp(127.0.0.1:3306)/?timeout=3s"); err != nil {
 		t.Skipf("本地 MySQL 不可用, 跳过: %v", err)
 	}
 
@@ -261,7 +273,7 @@ func TestSSHTunnelReconnect(t *testing.T) {
 	defer closeTunnel(name)
 
 	// 第一次拨号应成功
-	c1, err := dialViaTunnel(name, "127.0.0.1:3306")
+	c1, err := dialViaTunnelContext(context.Background(), name, "127.0.0.1:3306")
 	if err != nil {
 		t.Fatalf("first dial failed: %v", err)
 	}
@@ -273,7 +285,7 @@ func TestSSHTunnelReconnect(t *testing.T) {
 	tunMu.Unlock()
 
 	// 直接拨号此时应失败
-	if _, err := dialViaTunnel(name, "127.0.0.1:3306"); err == nil {
+	if _, err := dialViaTunnelContext(context.Background(), name, "127.0.0.1:3306"); err == nil {
 		t.Log("warning: dial after close unexpectedly succeeded (race)")
 	}
 
@@ -281,7 +293,7 @@ func TestSSHTunnelReconnect(t *testing.T) {
 	if _, err := reconnectTunnel(name); err != nil {
 		t.Fatalf("reconnect failed: %v", err)
 	}
-	c2, err := dialViaTunnel(name, "127.0.0.1:3306")
+	c2, err := dialViaTunnelContext(context.Background(), name, "127.0.0.1:3306")
 	if err != nil {
 		t.Fatalf("dial after reconnect failed: %v", err)
 	}
@@ -459,7 +471,7 @@ func TestSSHTunnelDialConcurrencyCapped(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			c, err := dialViaTunnel(name, target.Addr().String())
+			c, err := dialViaTunnelContext(context.Background(), name, target.Addr().String())
 			if err == nil {
 				_ = c.Close()
 			}
@@ -479,11 +491,11 @@ func TestSSHTunnelDialConcurrencyCapped(t *testing.T) {
 }
 
 // TestQueryDoesNotInvalidateSharedPool 是核心回归测试: Query 撞到坏连接 (EOF) 时
-// 【不再关闭共享 cache 连接池】。旧版 isBadConnErr -> Invalidate(name) 会
+// 【不再关闭共享 cache 连接池】。旧版坏连接判断 -> Invalidate(name) 会
 // db.Close()+delete 整个池, 并发下把正在用该池的其它查询一起打断 (unexpected EOF 雪崩)。
 //
 // 用一个自定义 database/sql 驱动确定性复刻: 对 "BADCONN" 查询返回 io.EOF
-// (被 isBadConnErr 判为坏连接), 其余正常。并发执行, 断言:
+// (模拟旧版坏连接判断会命中的错误), 其余正常。并发执行, 断言:
 //   - 共享池指针在并发期间保持不变 (池从未被 Invalidate 拆掉);
 //   - 正常查询不被连累。
 //
@@ -526,7 +538,7 @@ func TestQueryDoesNotInvalidateSharedPool(t *testing.T) {
 		go func(idx int) {
 			defer wg.Done()
 			if idx%4 == 0 {
-				_, _ = Query(name, "BADCONN") // 返回 EOF, 被 isBadConnErr 判为坏连接
+				_, _ = Query(name, "BADCONN") // 返回 EOF, 模拟旧版坏连接判断会命中
 				return
 			}
 			_, okErrs[idx] = Query(name, "SELECT 1") // 正常查询
@@ -570,7 +582,7 @@ func TestSSHWrongPassword(t *testing.T) {
 
 // TestSSHKeyAuth 验证私钥认证路径: 生成密钥对, 服务端授权对应公钥, 客户端用 PEM 私钥连接。
 func TestSSHKeyAuth(t *testing.T) {
-	if err := PingDSN("mysql", "root:root@tcp(127.0.0.1:3306)/?timeout=3s"); err != nil {
+	if err := pingDSN("mysql", "root:root@tcp(127.0.0.1:3306)/?timeout=3s"); err != nil {
 		t.Skipf("本地 MySQL 不可用, 跳过: %v", err)
 	}
 
