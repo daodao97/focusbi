@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"xproxy/dao"
+	"xproxy/internal/auth"
 	"xproxy/internal/schedule"
 
 	"github.com/gin-gonic/gin"
@@ -42,22 +43,51 @@ type scheduleView struct {
 	ReportName string `json:"report_name,omitempty"` // 关联报表名 (管理页用)
 }
 
-// listAllSchedules 列出全站所有定时任务 (管理页, 需 report.manage:rw)。
+func validateScheduleReportAccess(c *gin.Context, reportID int) bool {
+	report, err := dao.GetReportByID(reportID)
+	if err != nil {
+		fail(c, http.StatusNotFound, "报表不存在")
+		return false
+	}
+	if report.IsFolder() {
+		fail(c, http.StatusBadRequest, "文件夹不能配置定时任务")
+		return false
+	}
+	dsns, ok := authorizeReportContentDSNs(c, report.DSN, report.Content)
+	if !ok {
+		return false
+	}
+	if err := approveReportDSNs(reportID, report.Settings, dsns); err != nil {
+		fail(c, http.StatusInternalServerError, err.Error())
+		return false
+	}
+	return true
+}
+
+// listAllSchedules 列出定时任务管理页数据。RequireReportWriter 守卫只保证"是报表开发者",
+// 但本接口跨所有报表, 故按 report.{id}:w 逐条过滤: 只回用户有权写的报表的任务,
+// 否则仅持某一报表写权限者也能看到全站其他报表的调度信息 (报表名/参数/状态/脱敏 webhook)。
 func listAllSchedules(c *gin.Context) {
 	subs, err := dao.ListAllSchedules()
 	if err != nil {
 		fail(c, http.StatusInternalServerError, err.Error())
 		return
 	}
-	// 一次性取报表名映射, 避免逐条查库
-	names := map[int]string{}
-	if reports, err := dao.ListReports(); err == nil {
-		for _, r := range reports {
-			names[r.Id] = r.Name
-		}
+	parents, list, err := loadParentMap()
+	if err != nil {
+		fail(c, http.StatusInternalServerError, err.Error())
+		return
 	}
+	names := make(map[int]string, len(list))
+	for _, r := range list {
+		names[r.Id] = r.Name
+	}
+	p := auth.PermOf(c)
 	out := make([]scheduleView, 0, len(subs))
 	for _, s := range subs {
+		if !reportReadable(p, s.ReportID, parents, "w") {
+			continue // 无权写该报表 -> 不泄露其调度信息
+		}
 		out = append(out, scheduleView{
 			ScheduleRecord: s,
 			Webhook:        maskWebhook(s.Webhook),
@@ -70,6 +100,9 @@ func listAllSchedules(c *gin.Context) {
 func listSchedules(c *gin.Context) {
 	id, valid := paramID(c)
 	if !valid {
+		return
+	}
+	if !requireReportWrite(c, id) {
 		return
 	}
 	subs, err := dao.ListSchedulesByReport(id)
@@ -85,10 +118,13 @@ func listSchedules(c *gin.Context) {
 }
 
 // getSchedule 返回单条定时任务的完整信息 (含明文 webhook), 供编辑回填。
-// 调用者已经过 report.manage:rw 守卫, 本就能修改该 webhook, 故返回明文。
+// handler 内已校验 report.{id}:w, 调用者本就能修改该 webhook, 故返回明文。
 func getSchedule(c *gin.Context) {
 	id, valid := paramID(c)
 	if !valid {
+		return
+	}
+	if !requireReportWrite(c, id) {
 		return
 	}
 	sid, valid := paramSID(c)
@@ -108,12 +144,18 @@ func createSchedule(c *gin.Context) {
 	if !valid {
 		return
 	}
+	if !requireReportWrite(c, id) {
+		return
+	}
 	var r dao.ScheduleRecord
 	if err := c.ShouldBindJSON(&r); err != nil {
 		fail(c, http.StatusBadRequest, err.Error())
 		return
 	}
 	r.ReportID = id
+	if !validateScheduleReportAccess(c, id) {
+		return
+	}
 	// 仅 webhook 动作才需要校验 webhook; none (只跑不推) 允许空 webhook。
 	if r.Action != dao.ActionNone {
 		if err := schedule.ValidateWebhook(r.Webhook); err != nil {
@@ -134,6 +176,9 @@ func updateSchedule(c *gin.Context) {
 	if !valid {
 		return
 	}
+	if !requireReportWrite(c, id) {
+		return
+	}
 	sid, valid := paramSID(c)
 	if !valid {
 		return
@@ -147,6 +192,9 @@ func updateSchedule(c *gin.Context) {
 	old, err := dao.GetScheduleByID(sid)
 	if err != nil || old.ReportID != id {
 		fail(c, http.StatusNotFound, "定时任务不存在")
+		return
+	}
+	if !validateScheduleReportAccess(c, id) {
 		return
 	}
 	updates := r.Record()
@@ -173,6 +221,9 @@ func deleteSchedule(c *gin.Context) {
 	if !valid {
 		return
 	}
+	if !requireReportWrite(c, id) {
+		return
+	}
 	sid, valid := paramSID(c)
 	if !valid {
 		return
@@ -195,6 +246,9 @@ func testSchedule(c *gin.Context) {
 	if !valid {
 		return
 	}
+	if !requireReportWrite(c, id) {
+		return
+	}
 	sid, valid := paramSID(c)
 	if !valid {
 		return
@@ -202,6 +256,9 @@ func testSchedule(c *gin.Context) {
 	sub, err := dao.GetScheduleByID(sid)
 	if err != nil || sub.ReportID != id {
 		fail(c, http.StatusNotFound, "定时任务不存在")
+		return
+	}
+	if !validateScheduleReportAccess(c, id) {
 		return
 	}
 	if err := schedule.Execute(sub); err != nil {

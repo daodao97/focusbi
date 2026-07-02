@@ -75,8 +75,8 @@ func TestCreateReportRequiresWrite(t *testing.T) {
 	if _, _, err := createReportTool(roCtx, nil, createReportIn{Name: "x"}); err == nil {
 		t.Fatal("仅读权限不应能创建报表")
 	}
-	// 有 report.manage 写权限 -> 成功。
-	rwCtx := ctxWithPerm(map[string]string{"report.manage": "rw"})
+	// 有全局 report 写权限 -> 可在根目录创建。
+	rwCtx := ctxWithPerm(map[string]string{"report": "Rrw"})
 	_, out, err := createReportTool(rwCtx, nil, createReportIn{Name: "销售日报", DevContent: "SELECT 1;"})
 	if err != nil {
 		t.Fatalf("有写权限创建失败: %v", err)
@@ -84,11 +84,16 @@ func TestCreateReportRequiresWrite(t *testing.T) {
 	if out.ID <= 0 {
 		t.Fatalf("应返回新报表 id, got %d", out.ID)
 	}
+	// 仅单报表写权限不能扩展成根目录创建权限。
+	singleCtx := ctxWithPerm(map[string]string{"report.5": "rw"})
+	if _, _, err := createReportTool(singleCtx, nil, createReportIn{Name: "root"}); err == nil {
+		t.Fatal("单报表写权限不应能在根目录创建报表")
+	}
 }
 
 func TestListReportsFilteredByPermission(t *testing.T) {
 	setupTestDB(t)
-	rwCtx := ctxWithPerm(map[string]string{"report.manage": "rw"})
+	rwCtx := ctxWithPerm(map[string]string{"report": "Rrw"})
 	if _, _, err := createReportTool(rwCtx, nil, createReportIn{Name: "r1"}); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
@@ -112,7 +117,7 @@ func TestListReportsFilteredByPermission(t *testing.T) {
 func TestReportURLFromSiteConfig(t *testing.T) {
 	setupTestDB(t)
 	conf.Get().Site.URL = "https://bi.example.com/" // 尾部斜杠应被 SiteBaseURL 去掉
-	rwCtx := ctxWithPerm(map[string]string{"report.manage": "rw", "report": "Rr"})
+	rwCtx := ctxWithPerm(map[string]string{"report": "Rrw"})
 
 	// 报表 -> 控制台查看链接 + 编辑链接
 	_, created, err := createReportTool(rwCtx, nil, createReportIn{Name: "r1"})
@@ -180,7 +185,7 @@ func TestQueryRawSelectOnly(t *testing.T) {
 func TestQueryRawRequiresDsnRead(t *testing.T) {
 	setupTestDB(t)
 	// 无 dsn 权限 -> 拒绝。
-	ctx := ctxWithPerm(map[string]string{"report.manage": "rw"})
+	ctx := ctxWithPerm(map[string]string{"report": "Rrw"})
 	if _, _, err := queryRawTool(ctx, nil, queryRawIn{DSN: "default", SQL: "SELECT 1"}); err == nil {
 		t.Fatal("无 dsn 读权限应被拒绝")
 	}
@@ -191,10 +196,10 @@ func TestPreviewRequiresManage(t *testing.T) {
 	// 仅读 -> 拒绝。
 	if _, _, err := previewTemplateTool(ctxWithPerm(map[string]string{"report": "Rr"}), nil,
 		previewIn{DSN: "default", Content: "SELECT day, amount FROM biz;"}); err == nil {
-		t.Fatal("preview 需 report.manage 写权限")
+		t.Fatal("preview 需报表写权限")
 	}
 	// 有写 -> 成功并返回区块。
-	_, out, err := previewTemplateTool(ctxWithPerm(map[string]string{"report.manage": "rw"}), nil,
+	_, out, err := previewTemplateTool(ctxWithPerm(map[string]string{"report.5": "rw"}), nil,
 		previewIn{DSN: "default", Content: "SELECT day, amount FROM biz;"})
 	if err != nil {
 		t.Fatalf("preview 失败: %v", err)

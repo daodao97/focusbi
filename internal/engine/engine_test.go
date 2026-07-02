@@ -491,6 +491,101 @@ func TestMacroValuesMultiple(t *testing.T) {
 	}
 }
 
+// 注入防护: 标量宏值经 '{name}' 拼接后, 攻击者的引号必须被转义, 无法越出字面量。
+func TestMacroValuesEscapesScalars(t *testing.T) {
+	filters := []FilterDef{
+		{Name: "kw", Type: "string"},
+		{Name: "id", Type: "number"},
+		{Name: "st", Type: "enum"}, // 单选
+	}
+	// 字符串型: x' UNION SELECT ... 里的单引号翻倍, 拼进 '{kw}' 后仍是字面量。
+	m := macroValues(filters, map[string]string{
+		"kw": "x' UNION SELECT password FROM users -- ",
+		"id": "1 OR 1=1",
+		"st": "a' OR '1'='1",
+	})
+	// 越界判据: 去掉所有 '' 转义对后, 不应残留落单的单引号 (残留 = 能闭合作者的 '{name}')。
+	for _, name := range []string{"kw", "st"} {
+		if strings.Contains(strings.ReplaceAll(m[name], "''", ""), "'") {
+			t.Errorf("%s 存在未转义的落单单引号, 可越出字面量: %q", name, m[name])
+		}
+	}
+	sql := applyMacros("WHERE id = {id}", m)
+	// 数值型非法输入置空 (无引号列不会变成 id = 1 OR 1=1)。
+	if strings.Contains(sql, "id = 1 OR") {
+		t.Errorf("数值型未校验: %q", sql)
+	}
+	// 合法数值原样保留。
+	if got := macroValues(filters, map[string]string{"id": "42"})["id"]; got != "42" {
+		t.Errorf("合法数值应保留, got %q", got)
+	}
+	// {kw_raw} 逃生口保留原始值; {kw[raw]} 亦取未转义值。
+	m = macroValues(filters, map[string]string{"kw": "a'b"})
+	if m["kw_raw"] != "a'b" {
+		t.Errorf("_raw 应为原始值, got %q", m["kw_raw"])
+	}
+	if got := applyMacros("{kw[raw]}", m); got != "a'b" {
+		t.Errorf("[raw] 修饰符应取未转义值, got %q", got)
+	}
+}
+
+// 注入防护: 裸写的 date/time 宏 (WHERE day >= {day}) 必须强制日期字符校验。
+func TestMacroValuesValidatesDates(t *testing.T) {
+	filters := []FilterDef{
+		{Name: "day", Type: "date"},
+		{Name: "ts", Type: "time"},
+		{Name: "rng", Type: "date_range"},
+	}
+	// 合法日期/时间原样保留。
+	m := macroValues(filters, map[string]string{
+		"day": "2026-01-01",
+		"ts":  "2026-01-01 12:30:00",
+		"rng": "2026-01-01,2026-01-07",
+	})
+	if m["day"] != "2026-01-01" || m["ts"] != "2026-01-01 12:30:00" {
+		t.Errorf("合法日期/时间应保留: %+v", m)
+	}
+	if m["from_rng"] != "2026-01-01" || m["to_rng"] != "2026-01-07" {
+		t.Errorf("date_range 应展开并保留: %+v", m)
+	}
+	// 按月 date_range[Y-m] / 按年粒度 (SYNTAX 文档化) 不应被误杀置空。
+	gran := macroValues(filters, map[string]string{
+		"day": "2026",            // date[Y] 按年
+		"rng": "2026-05,2026-06", // date_range[Y-m] 按月
+	})
+	if gran["day"] != "2026" {
+		t.Errorf("按年粒度应保留, got %q", gran["day"])
+	}
+	if gran["from_rng"] != "2026-05" || gran["to_rng"] != "2026-06" {
+		t.Errorf("按月粒度 date_range[Y-m] 应保留, got from=%q to=%q", gran["from_rng"], gran["to_rng"])
+	}
+	// 注入串含非日期字符 -> 整体置空, 裸写 {day} 不会产生可执行片段。
+	bad := macroValues(filters, map[string]string{
+		"day": "2026-01-01 OR 1=1",
+		"rng": "2026-01-01 UNION SELECT 1,2",
+	})
+	sql := applyMacros("WHERE day >= {day} AND day <= {to_rng}", bad)
+	if strings.Contains(sql, "OR 1=1") || strings.Contains(sql, "UNION") {
+		t.Errorf("date 型未校验, 注入片段残留: %q", sql)
+	}
+	if bad["day"] != "" {
+		t.Errorf("非法日期应置空, got %q", bad["day"])
+	}
+	for _, evil := range []string{"2026-01-01-- ", "1+1", "2026-01-01;SELECT 1"} {
+		if got := macroValues(filters, map[string]string{"day": evil})["day"]; got != "" {
+			t.Errorf("非法日期 %q 应置空, got %q", evil, got)
+		}
+	}
+}
+
+// 未声明为过滤器的裸请求参数同样转义, 防止 {anyparam} 绕过。
+func TestMacroValuesEscapesUndeclaredParams(t *testing.T) {
+	m := macroValues(nil, map[string]string{"evil": "x' OR '1'='1"})
+	if strings.Contains(strings.ReplaceAll(m["evil"], "''", ""), "'") {
+		t.Errorf("未声明参数存在未转义的落单单引号: %q", m["evil"])
+	}
+}
+
 func TestParseFilterBodyEnumSQL(t *testing.T) {
 	f := parseFilterBody("region|地区||enum_sql(SELECT id AS value, name AS label FROM regions)")
 	if f.Type != "enum" {
@@ -498,6 +593,25 @@ func TestParseFilterBodyEnumSQL(t *testing.T) {
 	}
 	if f.optionSQL == "" {
 		t.Errorf("optionSQL 未填充: %+v", f)
+	}
+}
+
+func TestCollectDSNs(t *testing.T) {
+	content := `${region|地区||enum_sql[dim](SELECT id, name FROM regions)}
+-- @dsn=sales
+SELECT * FROM orders;
+#!SCRIPT
+const rows = query('SELECT * FROM users', [], {dsn:'crm'})
+const dyn = query('SELECT * FROM t', [], params.dsn)
+result.table({rows})
+#!END`
+	got := CollectDSNs("default", content)
+	want := []string{"crm", "default", "dim", "sales"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("CollectDSNs = %#v, want %#v", got, want)
+	}
+	if err := AllowlistAuthz(got)("secret"); err == nil {
+		t.Fatal("未批准的数据源应被 allowlist 拒绝")
 	}
 }
 

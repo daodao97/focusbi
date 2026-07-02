@@ -109,8 +109,9 @@ onMounted(load)
 .top h1 { font-size: 16px; margin: 0; color: var(--el-text-color-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .content { max-width: 1200px; margin: 0 auto; padding: 20px; }
 .sheet { background: var(--el-bg-color); border-radius: 8px; padding: 24px; }
-/* 长报表切换时 spinner 默认居中在很高的 sheet 内 (落在屏幕外), 改为固定在视口中央始终可见 */
-.sheet :deep(.el-loading-spinner) { position: fixed; top: 50%; }
+/* 长报表切换时 spinner 默认居中在很高的 sheet 内 (落在屏幕外)。用 sticky 让它在 sheet 内
+   水平居中 (避免 fixed 按整个视口居中), 纵向随滚动贴住视口中央保持可见。 */
+.sheet :deep(.el-loading-spinner) { position: sticky; top: 50%; }
 .prepend { margin-bottom: 16px; }
 
 /* 移动端: 收紧内边距, 顶栏允许换行, 内容区表格可横向滚动而非撑破布局。 */

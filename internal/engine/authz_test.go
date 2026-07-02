@@ -55,7 +55,7 @@ func TestAuthzAllowsAuthorizedDSN(t *testing.T) {
 
 func TestAuthzNilKeepsLegacyBehavior(t *testing.T) {
 	setupSQLiteDefault(t)
-	// authz=nil (公开/定时任务路径): 任意 dsn 不校验。这里用 default 跑通即可。
+	// authz=nil: 调用方明确选择预授权执行时, Runner 本身不再做数据源校验。
 	content := "SELECT day, pv FROM pv;\n"
 	res, err := NewRunner("default").Run(content, nil)
 	if err != nil {

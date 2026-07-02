@@ -126,7 +126,7 @@ onMounted(load)
         <el-divider content-position="left">数据源权限</el-divider>
         <el-form-item label="全部数据源">
           <el-radio-group :model-value="permOf('dsn')" @update:model-value="v => setPerm('dsn', v)">
-            <el-radio value="">不授予</el-radio>
+            <el-radio value="">部分</el-radio>
             <el-radio value="r">全部只读</el-radio>
             <el-radio value="rw">全部读写</el-radio>
           </el-radio-group>
@@ -148,19 +148,13 @@ onMounted(load)
         </el-form-item>
 
         <el-divider content-position="left">报表权限</el-divider>
-        <el-form-item label="管理报表">
-          <el-radio-group :model-value="permOf('report.manage')" @update:model-value="v => setPerm('report.manage', v)">
-            <el-radio value="">无</el-radio>
-            <el-radio value="rw">可建/改/删</el-radio>
-          </el-radio-group>
-        </el-form-item>
         <el-form-item label="全部报表">
           <el-radio-group :model-value="permOf('report')" @update:model-value="v => setPerm('report', v)">
-            <el-radio value="">不授予</el-radio>
+            <el-radio value="">部分</el-radio>
             <el-radio value="Rr">全部可读</el-radio>
             <el-radio value="Rrw">全部可读写</el-radio>
           </el-radio-group>
-          <div class="hint">递归授予所有报表; 也可在下方按单个报表精细控制。</div>
+          <div class="hint">递归授予所有报表。「可读」= 仅查看; 「可读写」= 可建/改/删/发布。也可选「部分」在下方按单个报表精细控制。</div>
         </el-form-item>
         <el-form-item label="按文件夹/报表">
           <div v-if="reportAllGranted" class="muted">已授予「全部报表」, 无需逐个设置。</div>
@@ -168,7 +162,7 @@ onMounted(load)
             <PermTree v-if="reportTree.length" :nodes="reportTree" :perms="form.perms" />
             <div v-else class="muted">暂无报表</div>
           </div>
-          <div class="hint">文件夹选「整夹可读」会递归覆盖其下所有子报表 (R 递归)。</div>
+          <div class="hint">「读」= 仅查看该报表; 「读写」= 可编辑/发布。文件夹选「整夹可读/可读写」会递归覆盖其下所有子报表。</div>
         </el-form-item>
 
         <el-form-item label="备注"><el-input v-model="form.remark" /></el-form-item>

@@ -5,7 +5,7 @@ import { ElMessage } from 'element-plus'
 import { Fold, Expand, SwitchButton, DataAnalysis, Document, Coin, User, Setting, Bell, Key, Moon, Sunny } from '@element-plus/icons-vue'
 import { api, clearToken, getToken } from '@/api'
 import { buildTree } from '@/tree'
-import { perm, loadPerm, clearPerm, canManageReports } from '@/perm'
+import { perm, loadPerm, clearPerm, canWriteAnyReport } from '@/perm'
 import { useTheme } from '@/theme'
 import ReportTreeMenu from './components/ReportTreeMenu.vue'
 
@@ -53,7 +53,7 @@ async function loadMe() {
 }
 
 const isAdmin = computed(() => perm.isAdmin)
-const canManageSchedule = computed(() => canManageReports())
+const canManageSchedule = computed(() => canWriteAnyReport())
 const userName = computed(() => perm.user?.nick || perm.user?.username || '')
 
 // 折叠态显示的顶层导航 (图标 + 跳转)

@@ -18,7 +18,7 @@ import (
 //	const rows = query('SELECT ... WHERE day=?', [params.day])
 //	result.table({ title:'渠道', columns:[{name:'ch',header:'渠道'}], rows })
 //
-// 安全前提: 脚本 = 在服务器执行任意 JS, 仅限 report.manage:rw 可写、内网信任环境部署。
+// 安全前提: 脚本 = 在服务器执行任意 JS, 仅限对报表有写权限 (report*:w) 者可写、内网信任环境部署。
 // goja 本身无文件/网络/exec 能力; 我们注入的 query (参数化) 与 fetch (任意外呼) 是仅有的外部面。
 
 // scriptTimeout 是单个脚本区块的总执行超时 (防死循环)。var 便于测试覆写。

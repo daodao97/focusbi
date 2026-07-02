@@ -42,18 +42,25 @@ func publicRunReport(c *gin.Context) {
 	var req runRequest
 	_ = c.ShouldBindJSON(&req)
 
-	result, err := engine.NewRunner(r.DSN).WithNoCache(noCacheParam(req.Params)).Run(r.Content, req.Params)
+	settings := r.ParseSettings()
+	if len(settings.ApprovedDSNs) == 0 {
+		fail(c, http.StatusForbidden, "分享报表未完成数据源预授权, 请重新开启分享")
+		return
+	}
+	result, err := engine.NewRunner(r.DSN).
+		WithNoCache(noCacheParam(req.Params)).
+		WithAuthz(engine.AllowlistAuthz(settings.ApprovedDSNs)).
+		Run(r.Content, req.Params)
 	if err != nil {
 		fail(c, http.StatusInternalServerError, err.Error())
 		return
 	}
-	settings := r.ParseSettings()
 	result.AutoRefresh = settings.AutoRefresh       // 报表级自动刷新
 	result.PrependContent = settings.PrependContent // 页面顶部 HTML
 	ok(c, result)
 }
 
-// ---- 分享开关 (管理端, 需 report.manage) ----
+// ---- 分享开关 (管理端, 需 report.{id}:w) ----
 
 type shareReq struct {
 	Enable bool `json:"enable"`
@@ -63,6 +70,9 @@ type shareReq struct {
 func setReportShare(c *gin.Context) {
 	id, valid := paramID(c)
 	if !valid {
+		return
+	}
+	if !requireReportWrite(c, id) {
 		return
 	}
 	var req shareReq
@@ -75,6 +85,16 @@ func setReportShare(c *gin.Context) {
 	if err != nil {
 		fail(c, http.StatusNotFound, "报表不存在")
 		return
+	}
+	if req.Enable && !r.IsFolder() {
+		dsns, ok := authorizeReportContentDSNs(c, r.DSN, r.Content)
+		if !ok {
+			return
+		}
+		if err := approveReportDSNs(id, r.Settings, dsns); err != nil {
+			fail(c, http.StatusInternalServerError, err.Error())
+			return
+		}
 	}
 
 	token := r.ShareToken

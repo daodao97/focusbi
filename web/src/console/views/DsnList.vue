@@ -29,9 +29,11 @@ const dsnPlaceholder = computed(() => DSN_PLACEHOLDER[form.driver] || '')
 const sshSupported = computed(() => form.driver === 'mysql')
 
 // 构造提交给后端的完整 payload
+// 敏感字段 (连接串密码段 / SSH 密码 / 私钥 / 口令) 从 listDsn 拿到的是 **** 脱敏占位;
+// 未改动则原样回传, 后端按 id 用库中原值补回, 不会把凭据覆盖成 ****。
 function buildPayload() {
   return {
-    name: form.name, driver: form.driver, dsn: form.dsn, remark: form.remark,
+    id: form.id, name: form.name, driver: form.driver, dsn: form.dsn, remark: form.remark,
     ssh_enabled: sshSupported.value && form.ssh_enabled,
     ssh_host: form.ssh_host, ssh_port: Number(form.ssh_port) || 22, ssh_user: form.ssh_user,
     ssh_auth: form.ssh_auth, ssh_password: form.ssh_password,

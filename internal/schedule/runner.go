@@ -24,7 +24,14 @@ func Execute(sub *dao.ScheduleRecord) error {
 		return fmt.Errorf("报表不存在: %w", err)
 	}
 
-	result, err := engine.NewRunner(report.DSN).WithNoCache(true).Run(report.Content, sub.Params)
+	settings := report.ParseSettings()
+	if len(settings.ApprovedDSNs) == 0 {
+		return fmt.Errorf("报表未完成数据源预授权, 请重新发布或保存定时任务")
+	}
+	result, err := engine.NewRunner(report.DSN).
+		WithNoCache(true).
+		WithAuthz(engine.AllowlistAuthz(settings.ApprovedDSNs)).
+		Run(report.Content, sub.Params)
 	if err != nil {
 		return fmt.Errorf("执行报表失败: %w", err)
 	}

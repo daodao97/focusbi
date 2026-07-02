@@ -34,8 +34,9 @@ func (r *ReportRecord) IsFolder() bool { return r.Type == "folder" }
 
 // ReportSettings 是 report.settings 的页面级配置 (JSON)。
 type ReportSettings struct {
-	AutoRefresh    int    `json:"auto_refresh"`    // 自动刷新间隔 (秒); 0 关闭
-	PrependContent string `json:"prepend_content"` // 页面顶部注入的原始 HTML (移植自 dataddy); 前端 v-html 渲染
+	AutoRefresh    int      `json:"auto_refresh"`            // 自动刷新间隔 (秒); 0 关闭
+	PrependContent string   `json:"prepend_content"`         // 页面顶部注入的原始 HTML (移植自 dataddy); 前端 v-html 渲染
+	ApprovedDSNs   []string `json:"approved_dsns,omitempty"` // 发布/分享/调度预授权的数据源白名单
 }
 
 // ParseSettings 解析 settings JSON; 为空或非法时返回零值配置。
@@ -46,6 +47,22 @@ func (r *ReportRecord) ParseSettings() ReportSettings {
 	}
 	_ = json.Unmarshal([]byte(r.Settings), &s)
 	return s
+}
+
+func SettingsWithApprovedDSNs(settings string, dsns []string) string {
+	var obj map[string]any
+	if strings.TrimSpace(settings) != "" {
+		_ = json.Unmarshal([]byte(settings), &obj)
+	}
+	if obj == nil {
+		obj = map[string]any{}
+	}
+	obj["approved_dsns"] = dsns
+	b, err := json.Marshal(obj)
+	if err != nil {
+		return settings
+	}
+	return string(b)
 }
 
 func (r *ReportRecord) Record() xdb.Record {
@@ -218,6 +235,18 @@ func PublishReport(id int) error {
 		return err
 	}
 	_, err = Report.Update(xdb.Record{"content": r.DevContent}, xdb.WhereEq("id", id))
+	return err
+}
+
+// PublishReportContentWithSettings 发布指定内容, 并在同一次更新里写入与该内容匹配的 settings。
+func PublishReportContentWithSettings(id int, content, settings string) error {
+	if Report == nil {
+		return fmt.Errorf("report model not initialized")
+	}
+	_, err := Report.Update(xdb.Record{
+		"content":  content,
+		"settings": settings,
+	}, xdb.WhereEq("id", id))
 	return err
 }
 

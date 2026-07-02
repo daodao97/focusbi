@@ -5,14 +5,16 @@ import { ElMessage } from 'element-plus'
 import { VideoPlay, VideoPause } from '@element-plus/icons-vue'
 import { api } from '@/api'
 import { copyText } from '@/clipboard'
-import { canManageReports } from '@/perm'
+import { canWriteReport } from '@/perm'
 import { paramsToQuery, queryToParams, sameQuery } from '@/params'
 import { useAutoRefresh } from '@/autorefresh'
 import ReportFilters from '@/components/ReportFilters.vue'
 import ReportBlocks from '@/components/ReportBlocks.vue'
 import TimingTooltip from '@/components/TimingTooltip.vue'
 
-const canManage = computed(() => canManageReports())
+// 编辑/分享按钮按"能否写该报表"显示 (report.<id>:w 或祖先文件夹递归), 与后端判权一致。
+const parents = ref({})
+const canManage = computed(() => canWriteReport(report.id, parents.value))
 
 const props = defineProps({ id: { type: String, default: '' } })
 const route = useRoute()
@@ -33,6 +35,12 @@ async function load() {
   report.name = r.name
   report.is_public = r.is_public
   report.share_token = r.share_token || ''
+  // 取报表树 (id->parent) 供祖先链写权限判定; 失败不阻断查看。
+  api.listReports().then(list => {
+    const m = {}
+    for (const x of list) m[x.id] = x.parent_id
+    parents.value = m
+  }).catch(() => {})
   // 初始过滤值来自 URL query, 方便分享链接直接复现
   params.value = queryToParams(route.query)
   await run()
@@ -159,8 +167,9 @@ onMounted(load)
 .title { margin: 0; font-size: 18px; }
 .actions { display: flex; gap: 8px; }
 .sheet { background: var(--el-bg-color); border-radius: 8px; padding: 24px; min-height: 200px; }
-/* 长报表切换时 spinner 默认居中在很高的 sheet 内 (落在屏幕外), 改为固定在视口中央始终可见 */
-.sheet :deep(.el-loading-spinner) { position: fixed; top: 50%; }
+/* 长报表切换时 spinner 默认居中在很高的 sheet 内 (落在屏幕外)。用 sticky 让它在 sheet 内
+   水平居中 (不受侧边栏影响, 避免 fixed 按整个视口居中导致左偏), 纵向随滚动贴住视口中央保持可见。 */
+.sheet :deep(.el-loading-spinner) { position: sticky; top: 50%; }
 .share-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
 .share-hint { font-size: 12px; color: var(--el-text-color-secondary); line-height: 1.6; margin: 0 0 14px; }
 .share-actions { margin-top: 8px; text-align: right; }

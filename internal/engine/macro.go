@@ -90,7 +90,15 @@ func substitute(line string, macros map[string]string) string {
 		}
 		// 逗号组合: 取第一个存在的值
 		for _, n := range strings.Split(name, ",") {
-			if v, ok := macros[strings.TrimSpace(n)]; ok {
+			n = strings.TrimSpace(n)
+			if v, ok := macros[n]; ok {
+				// [raw]: 作者显式索要原始未转义值 (如动态标识符/自行拼 SQL)。
+				// 默认 {name} 取转义值; raw 走 {name_raw} 逃生口。
+				if mod == "raw" {
+					if rawV, ok := macros[n+"_raw"]; ok {
+						return rawV
+					}
+				}
 				if mod != "" {
 					return applyModifier(v, mod)
 				}

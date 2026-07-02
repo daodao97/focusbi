@@ -10,6 +10,7 @@ FocusBI is a SQL-report management system: users write report templates (SQL + a
 
 ```bash
 make run        # build frontend + run backend (dev) on :8099  (= make web && go run ./cmd --app-env dev --bind :8099)
+make start      # run backend only (skips frontend rebuild — faster when iterating on Go code)
 make web        # build frontend only -> web/dist (embedded into the Go binary)
 make web_dev    # frontend dev server with HMR, proxies /api to :8099
 make build      # production single binary -> build/server (embeds web/dist)
@@ -24,6 +25,7 @@ gofmt -w <file>                                 # format before committing; CI-s
 - Frontend uses **pnpm** (not npm). Building requires `pnpm install` (handled by `make web`).
 - The `default` database (`conf.database[default]`) must be **MySQL** — migrations auto-run via goose on startup and only support MySQL (`dao/dao.go:initSchema`). Report *data sources* (the `dsn` table) additionally support PostgreSQL and SQLite.
 - Demo data: `mysql ... < docs/schema.sql` (sales tables + a sample report).
+- Docker deployment lives in `deploy/` (`install.sh` generates compose.yaml + conf.prod.yaml + deploy.sh); it is user-facing and documented in `deploy/README.md`.
 
 ## Architecture
 
@@ -43,9 +45,9 @@ gofmt -w <file>                                 # format before committing; CI-s
 
 **Scheduled tasks (`internal/schedule/` + `job/`)**: a "schedule" is essentially a cron job (run a report on a cron, then act on the result — pushing to a webhook is its main action today). `job.NewCronServer` registers a per-minute xcron tick (distributed-locked). `Tick` scans enabled schedules, atomically claims each due one (`ClaimScheduleRun`, prevents multi-instance dupes), runs the report, and pushes to lark/wework webhooks. Two modes: unconditional scheduled push, or threshold alarm (`ScheduleCondition`). `@data_fluctuations` messages on the report surface in `Result.Messages` and are folded into the push body. (DB table `report_schedule`, DAO `dao.ScheduleRecord`.)
 
-**MCP server (`internal/mcpserver/` + `api/mcp.go`)**: exposes report-development tools to AI clients (Codex/Claude Code) over `/mcp` (Streamable HTTP, official `modelcontextprotocol/go-sdk`). Auth is the security-critical part: the SDK's `RequireBearerToken` middleware verifies a Bearer token via `VerifyToken` (an `fbt_`-prefixed API token from the `api_token` table, or a login JWT), puts the user id in the request context, and `principalFromContext` loads the user + compiles `auth.NewPermission`. **Every tool gates on the caller's RBAC** (same `report.manage`/`dsn` resources as REST) — tools never bypass permissions. Report-readability logic is shared with `api/` via `auth.ReportReadable`/`LoadReportParents`. API tokens store only a SHA-256 hash; plaintext is shown once at creation.
+**MCP server (`internal/mcpserver/` + `api/mcp.go`)**: exposes report-development tools to AI clients (Codex/Claude Code) over `/mcp` (Streamable HTTP, official `modelcontextprotocol/go-sdk`). Auth is the security-critical part: the SDK's `RequireBearerToken` middleware verifies a Bearer token via `VerifyToken` (an `fbt_`-prefixed API token from the `api_token` table, or a login JWT), puts the user id in the request context, and `principalFromContext` loads the user + compiles `auth.NewPermission`. **Every tool gates on the caller's RBAC** (same `report*`/`dsn` resources as REST) — tools never bypass permissions. Report-readability logic is shared with `api/` via `auth.ReportReadable`/`LoadReportParents`. API tokens store only a SHA-256 hash; plaintext is shown once at creation.
 
-**Frontend (`web/`)**: Vite MPA, two entries — `index.html` (`src/console/`, management console: report list/editor/datasources) and `view.html` (`src/viewer/`, standalone shareable report view). Built `web/dist` is `go:embed`ed and served by `api/ui.go`. `docs/SYNTAX.md` is also served (the in-app "docs" button fetches it), so it is simultaneously the human spec, the AI system prompt, and the in-app help — edit it in one place.
+**Frontend (`web/`)**: Vite MPA, two entries — `index.html` (`src/console/`, management console: report list/editor/datasources) and `view.html` (`src/viewer/`, standalone shareable report view). Built `web/dist` is `go:embed`ed and served by `api/ui.go`. `docs/SYNTAX.md` and `docs/MCP.md` are also served at `/SYNTAX.md` / `/MCP.md` (`api/ui.go`) — SYNTAX.md is simultaneously the human spec, the AI system prompt, and the in-app help; MCP.md is the in-app MCP setup guide. Edit each in one place.
 
 ## Conventions
 

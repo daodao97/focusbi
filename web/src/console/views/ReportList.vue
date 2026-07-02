@@ -5,7 +5,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { Document, Folder, MoreFilled, Hide } from '@element-plus/icons-vue'
 import { api } from '@/api'
 import { buildTree, folderOptions } from '@/tree'
-import { canManageReports } from '@/perm'
+import { can, canWriteAnyReport, canWriteReport } from '@/perm'
 import ReportTreeMenu from '../components/ReportTreeMenu.vue'
 import ReportEditor from '../components/ReportEditor.vue'
 
@@ -13,7 +13,17 @@ const router = useRouter()
 const flat = ref([])
 const loading = ref(false)
 const treeRef = ref(null)
-const canManage = computed(() => canManageReports())
+// 是否报表开发者: 决定顶部 +文件夹/+报表 与拖拽是否可用。
+const canManage = computed(() => canWriteAnyReport())
+const canManageRoot = computed(() => can('report', 'w'))
+// id->parent 映射, 供逐节点写权限判定。
+const parents = computed(() => {
+  const m = {}
+  for (const x of flat.value) m[x.id] = x.parent_id
+  return m
+})
+// 能否写某具体节点 (report.<id>:w 或祖先文件夹递归), 决定该行的移动/删除/编辑入口。
+function canWriteNode(id) { return canWriteReport(id, parents.value) }
 
 const tree = computed(() => buildTree(flat.value))
 const folderOpts = computed(() => folderOptions(flat.value))
@@ -78,9 +88,9 @@ async function load() {
 }
 
 // 左树点击报表:
-//   有编辑权 -> 右侧进编辑器; 只读 -> 跳查看页
+//   能写该报表 -> 右侧进编辑器; 否则 -> 跳查看页
 function selectReport(id) {
-  if (!canManage.value) {
+  if (!canWriteNode(id)) {
     router.push(`/reports/${id}`)
     return
   }
@@ -160,7 +170,7 @@ onMounted(load)
     <aside class="tree-pane" v-loading="loading">
       <div class="tree-head">
         <span>报表</span>
-        <div v-if="canManage" class="head-actions">
+        <div v-if="canManageRoot" class="head-actions">
           <el-button link size="small" @click="newFolder">+文件夹</el-button>
           <el-button link type="primary" size="small" @click="newReportIn(0)">+报表</el-button>
         </div>
@@ -185,7 +195,7 @@ onMounted(load)
             </span>
             <span class="node-ops" @click.stop>
               <template v-if="data.type === 'folder'">
-                <el-dropdown v-if="canManage" trigger="click" @command="cmd => cmd(data)">
+                <el-dropdown v-if="canWriteNode(data.id)" trigger="click" @command="cmd => cmd(data)">
                   <el-icon class="more"><MoreFilled /></el-icon>
                   <template #dropdown>
                     <el-dropdown-menu>
@@ -203,7 +213,7 @@ onMounted(load)
                   <template #dropdown>
                     <el-dropdown-menu>
                       <el-dropdown-item :command="d => viewReport(d.id)">查看</el-dropdown-item>
-                      <template v-if="canManage">
+                      <template v-if="canWriteNode(data.id)">
                         <el-dropdown-item :command="openMove">移动</el-dropdown-item>
                         <el-dropdown-item :command="remove" divided>删除</el-dropdown-item>
                       </template>

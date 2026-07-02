@@ -87,10 +87,10 @@ bearer_token_env_var = "FOCUSBI_TOKEN"
 | `list_datasources` | 列出你可用的数据源 (脱敏, 不含连接串/密钥) | 数据源读 |
 | `list_databases` / `list_tables` / `describe_table` | 探数据源的库 / 表 / 列定义 | 数据源读 |
 | `query_raw` | 只读 SELECT 探数据 (拒非 SELECT / 多语句, 限 200 行) | 数据源读 |
-| `preview_template` | 试跑一段模板返回结构化结果 (含每块错误), 不落库 | report.manage 写 |
-| `create_report` | 创建报表或文件夹 | report.manage 写 |
-| `update_report` | 更新报表的开发版草稿 / 名称 / 数据源 / 设置 | report.manage 写 |
-| `publish_report` | 把开发版草稿发布为正式版 (并记录版本快照) | report.manage 写 |
+| `preview_template` | 试跑一段模板返回结构化结果 (含每块错误), 不落库 | 报表写 (任一) |
+| `create_report` | 创建报表或文件夹 | 父级写 / 根建需全局 `report:w` |
+| `update_report` | 更新报表的开发版草稿 / 名称 / 数据源 / 设置 | 该报表写 |
+| `publish_report` | 把开发版草稿发布为正式版 (并记录版本快照) | 该报表写 |
 
 还提供一个资源 `focusbi://syntax` (同 `get_syntax_doc`, 资源形式)。
 

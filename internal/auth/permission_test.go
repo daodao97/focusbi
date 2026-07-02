@@ -114,6 +114,64 @@ func TestParseResourceJSON(t *testing.T) {
 
 // ---- 按数据源权限 (dsn.<id> / dsn.default) ----
 
+// P0-2: 写路径按 report.<id>:w 判权 (与读路径对称)。全局 report.manage:rw 不覆盖
+// 具体报表的写权限 —— 那是路由守卫,判"是否作者",此处判"能否动这个报表"。
+func TestReportReadableWriteMode(t *testing.T) {
+	// 树: 10(folder) -> 20(report); 30(report) 独立
+	parents := map[int]int{10: 0, 20: 10, 30: 0}
+
+	// 直接授 report.20:w -> 可写 20, 不可写 30
+	p := perm(map[string]string{"report.20": "w"})
+	if !p.ReportReadable(20, parents, "w") {
+		t.Error("report.20:w 应可写 20")
+	}
+	if p.ReportReadable(30, parents, "w") {
+		t.Error("不应可写未授权的 30")
+	}
+
+	// 授文件夹 report.10:Rw (递归) -> 覆盖后代 20 的写
+	pf := perm(map[string]string{"report.10": "Rw"})
+	if !pf.ReportReadable(20, parents, "w") {
+		t.Error("文件夹 report.10:Rw 应递归覆盖后代 20 的写")
+	}
+
+	// 只读授权不产生写权限
+	pr := perm(map[string]string{"report.20": "r"})
+	if pr.ReportReadable(20, parents, "w") {
+		t.Error("report.20:r 不应有写权限")
+	}
+
+	// report.manage:rw (全局扁平, 与 report.<id> 不同命名空间) 不覆盖具体报表写
+	pm := perm(map[string]string{"report.manage": "rw"})
+	if pm.ReportReadable(20, parents, "w") {
+		t.Error("report.manage:rw 不应授予 report.20 的写权限 (P0-2 核心)")
+	}
+}
+
+// CanWriteAnyReport: 任意范围有报表写即为开发者 (供无 id 的写入口判权)。
+func TestCanWriteAnyReport(t *testing.T) {
+	cases := []struct {
+		name  string
+		perms map[string]string
+		want  bool
+	}{
+		{"全局递归写", map[string]string{"report": "Rrw"}, true},
+		{"单报表写", map[string]string{"report.5": "rw"}, true},
+		{"文件夹递归写", map[string]string{"report.10": "Rw"}, true},
+		{"仅只读", map[string]string{"report": "Rr", "report.5": "r"}, false},
+		{"无报表权限", map[string]string{"dsn": "r"}, false},
+		{"空权限", map[string]string{}, false},
+		{"通配符写", map[string]string{"*": "rw"}, true},
+		{"__all 写", map[string]string{"__all": "rw"}, true},
+		{"通配符只读", map[string]string{"*": "r"}, false},
+	}
+	for _, c := range cases {
+		if got := perm(c.perms).CanWriteAnyReport(); got != c.want {
+			t.Errorf("%s: CanWriteAnyReport()=%v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
 func TestDsnResourceByID(t *testing.T) {
 	if DsnResourceByID(5) != "dsn.5" {
 		t.Errorf("DsnResourceByID(5) = %q, want dsn.5", DsnResourceByID(5))

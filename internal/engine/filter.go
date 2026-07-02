@@ -2,6 +2,7 @@ package engine
 
 import (
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -212,13 +213,19 @@ func parseFilterType(s string) (typ, format string, opts []EnumOpt, multiple boo
 
 // macroValues 依据过滤器定义与请求参数, 计算所有可用的宏值。
 // date_range 类型会展开为 {from_<name>} 与 {to_<name>} 两个宏。
+//
+// 安全: 宏值被字面拼进 SQL (作者按 SYNTAX §8 写 '{name}' 自己加引号), 故这里对所有
+// 用户可控的字符串值做单引号转义 (' -> ”), 数值/日期型强制类型校验。攻击者传入的
+// x' UNION SELECT ... 会被转义成字面量, 无法越出引号。需要原始未转义值的场景用 {name_raw}。
 func macroValues(filters []FilterDef, params map[string]string) map[string]string {
 	macros := map[string]string{}
 
 	// 先收下所有 params: 非过滤器的派生值 (如 @setup 脚本 setParam 写入的 is_current)
-	// 也能作为 {name} 宏使用。下方过滤器循环会用类型化处理覆盖同名项。
+	// 也能作为 {name} 宏使用。@setup 派生值来自可信脚本, 但请求 params 也会落这里,
+	// 故未声明为过滤器的值同样转义, 防止注入未声明的裸参数名。下方过滤器循环覆盖同名项。
 	for k, v := range params {
-		macros[k] = v
+		macros[k] = sqlEscape(v)
+		macros[k+"_raw"] = v
 	}
 
 	for _, f := range filters {
@@ -226,23 +233,80 @@ func macroValues(filters []FilterDef, params map[string]string) map[string]strin
 		if !ok || strings.TrimSpace(val) == "" {
 			val = defaultValue(f)
 		}
+		macros[f.Name+"_raw"] = val
 
 		switch {
 		case f.Type == "date_range" || f.Type == "time_range":
+			// 日期/时间强制格式校验: 非法值置空。作者可裸写 WHERE day >= {from_x},
+			// 攻击者传 "2026-01-01 OR 1=1" 会被整体置空, 无法注入。
 			from, to := splitRange(val, f.Type)
-			macros["from_"+f.Name] = from
-			macros["to_"+f.Name] = to
-			macros[f.Name] = val
+			macros["from_"+f.Name] = sqlDate(from)
+			macros["to_"+f.Name] = sqlDate(to)
+			macros[f.Name] = sqlDateRange(val) // 合并值也校验 (含逗号分隔)
+		case f.Type == "date" || f.Type == "time":
+			macros[f.Name] = sqlDate(val)
 		case f.Type == "enum" && f.Multiple:
 			// 多选: {name} 展开为 SQL in-list ('a','b','c'), 作者写 WHERE x IN ({name})。
 			// 同时给 {name_raw} = 原始逗号串, 供需要原值的场景。
 			macros[f.Name] = sqlInList(val)
 			macros[f.Name+"_raw"] = val
+		case f.Type == "number":
+			// 数值型强制校验: 非合法数字则置空 (作者可用 -- {?name} 行条件跳过)。
+			macros[f.Name] = sqlNumber(val)
 		default:
-			macros[f.Name] = val
+			macros[f.Name] = sqlEscape(val)
 		}
 	}
 	return macros
+}
+
+// sqlEscape 对宏值做 SQL 单引号转义 (' -> ”), 使其嵌入 '{name}' 后无法越出字面量。
+// 作者按 SYNTAX 约定自行在 SQL 里写引号 (WHERE x = '{name}'), 本函数只保证引号内安全。
+func sqlEscape(v string) string {
+	return strings.ReplaceAll(v, "'", "''")
+}
+
+// sqlNumber 校验并规整数值型宏值: 合法整数/浮点原样返回, 否则返回空串。
+// 空串配合作者的 -- {?name} 行条件可自然跳过该条件; 无行条件时 = 或 IN 处会因空值不命中。
+func sqlNumber(v string) string {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return ""
+	}
+	if _, err := strconv.ParseFloat(v, 64); err == nil {
+		return v
+	}
+	return ""
+}
+
+// dateValueRe 匹配常见日期/时间字面量: 年必填, 月、日各自可选 (支持按年 2026 / 按月
+// 2026-05 / 完整 2026-05-01 三种粒度, 见 SYNTAX date[Y]/date_range[Y-m]), 后可跟
+// 可选的 时:分[:秒[.纳秒]] 与时区。锚定 ^...$, 故 "2026-05-01 OR 1=1" / "-- " / "1+1"
+// 这类注入或注释片段整体不匹配。
+var dateValueRe = regexp.MustCompile(`^\d{4}(?:[-/.]\d{1,2}){0,2}(?:[ T]\d{1,2}:\d{2}(?::\d{2}(?:\.\d{1,9})?)?)?(?:Z|[+-]\d{2}:?\d{2})?$`)
+
+// sqlDate 校验日期/时间型宏值: 只接受上面 dateValueRe 认可的日期/时间字面量, 非法则置空。
+// 不能仅做字符白名单, 否则 "-- " 这类注释片段或 "1+1" 表达式仍可出现在裸宏位置。
+// 作者可裸写 WHERE day >= {day}; 非法输入置空后配合 -- {?day} 行条件可跳过, 无行条件则不命中。
+func sqlDate(v string) string {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return ""
+	}
+	if dateValueRe.MatchString(v) {
+		return v
+	}
+	return ""
+}
+
+func sqlDateRange(v string) string {
+	from, to := splitRange(v, "")
+	from = sqlDate(from)
+	to = sqlDate(to)
+	if from == "" || to == "" {
+		return ""
+	}
+	return from + "," + to
 }
 
 // sqlInList 把逗号分隔的多选值转成 SQL in-list: "a,b" -> "'a','b'"。
@@ -255,7 +319,7 @@ func sqlInList(val string) string {
 		if p == "" {
 			continue
 		}
-		quoted = append(quoted, "'"+strings.ReplaceAll(p, "'", "''")+"'")
+		quoted = append(quoted, "'"+sqlEscape(p)+"'")
 	}
 	if len(quoted) == 0 {
 		return "''"

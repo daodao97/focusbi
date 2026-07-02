@@ -1,12 +1,12 @@
 <script setup>
-// 全站任务管理页 (需 report.manage:rw): 列出所有报表的定时任务, 可启停/编辑/删除/测试/新增。
+// 任务管理页 (需报表写权限): 列出用户可写报表的定时任务, 可启停/编辑/删除/测试/新增。
 import { ref, computed, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { api } from '@/api'
-import { canManageReports } from '@/perm'
+import { canWriteAnyReport, canWriteReport } from '@/perm'
 import ScheduleForm from '../components/ScheduleForm.vue'
 
-const canManage = computed(() => canManageReports())
+const canManage = computed(() => canWriteAnyReport())
 const list = ref([])
 const reports = ref([])     // 可选报表 (新增时选)
 const loading = ref(false)
@@ -28,7 +28,10 @@ async function load() {
 async function loadReports() {
   try {
     const all = await api.listReports()
-    reports.value = (all || []).filter(r => r.type !== 'folder')
+    // 新建任务只能选用户有写权限的报表 (与后端 report.{id}:w 一致)。
+    const parents = {}
+    for (const x of all || []) parents[x.id] = x.parent_id
+    reports.value = (all || []).filter(r => r.type !== 'folder' && canWriteReport(r.id, parents))
   } catch {
     reports.value = []
   }

@@ -112,8 +112,10 @@ MySQL 数据源可通过 SSH 跳板机连接 (在数据源弹窗中开启「SSH 
 支持 `parent_id` **父角色继承**。资源串按 `.` 分段成树:
 
 - 模式字符: `r` 读 / `w` 写 / `R` 递归 (覆盖所有更深层子资源)
-- 资源: `report`(全部报表) / `report.{id}`(单个) / `report.manage`(建改删) /
+- 资源: `report`(全部报表) / `report.{id}`(单个报表或文件夹) /
   `dsn`(全部数据源) / `dsn.{id}`(单个数据源, 主库用 `dsn.default`)
+- 报表写权限是**单一维度**: 有 `report*:w` 即可编辑/发布对应范围的报表 (`r` = 仅查看,
+  `w` = 可建/改/删/发布), 无需再单列"管理"开关。
 - 例: `{"report":"Rr","report.5":"rw","dsn.3":"r"}` = 所有报表可读 + 报表5可读写 +
   仅数据源 3 可用
 - 超管 (`is_admin`) 全权; 角色不能授出超过自身的权限 (转委校验)
@@ -126,7 +128,11 @@ MySQL 数据源可通过 SSH 跳板机连接 (在数据源弹窗中开启「SSH 
   还包括块注解 `@dsn=` 覆盖、脚本 `query(sql,args,dsn)`、`enum_sql` 自定义源,
   无权的块以错误返回。作者无法借 `@dsn=other` 绕到无权的库。
 - 资源键用**数据源 id** (与 `report.{id}` 一致), 不受数据源**改名**影响。
-- **例外 (不强制)**: 公开分享页 (作者已主动公开) 与定时任务 (系统调度) 按预授权执行。
+- **预授权执行**: 公开分享页与定时任务执行时没有登录用户上下文, 因此按发布/开启分享/
+  创建或更新任务时的操作者权限静态收集并校验报表内容触达的数据源, 写入
+  `report.settings.approved_dsns`; 无权数据源会阻止这些动作。公开分享与定时任务运行时
+  再用该 allowlist 校验实际触达的数据源, 因此脚本里通过请求参数动态选择的 `dsn`
+  只能落在已批准列表内。默认数据源总会进入 allowlist, 规则保持简单可预期。
 - 升级兼容: 旧角色若"能读报表但没配过任何 dsn 权限", 启动时自动回填 `dsn:r` (保持
   可用所有源), 之后管理员可在「角色管理 → 按数据源」逐个收紧。
 
@@ -139,7 +145,10 @@ MySQL 数据源可通过 SSH 跳板机连接 (在数据源弹窗中开启「SSH 
 - 列表过滤会保留含可读后代的文件夹 (树不断链); 删除非空文件夹被拒。
 
 **鉴权**: Gin 中间件解析 token → 构建用户权限 → 注入 context。报表列表按权限过滤,
-单报表查看校验 `report.{id}:r`, 建改删需 `report.manage:rw`; 数据源列表/schema 探查/运行
+单报表查看校验 `report.{id}:r`; 建改删/发布在 handler 内校验 `report.{id}:w` (含祖先文件夹递归)。
+无具体报表 id 的写入口 (模板预览、AI 改写、全局定时任务页) 校验"是否报表开发者"
+(任意范围有 `report*:w`); 根目录创建/移动额外要求全局 `report:w`;
+数据源列表/schema 探查/运行
 按 `dsn.{id}:r` (或全局 `dsn:r`) 细粒度判定, 增删改数据源需 `dsn:rw`; 用户/角色管理仅超管。
 
 ## REST 接口
@@ -154,11 +163,12 @@ MySQL 数据源可通过 SSH 跳板机连接 (在数据源弹窗中开启「SSH 
 | POST | `/api/dsn/test` | 测试连接 | `dsn:rw` |
 | GET | `/api/report` | 报表列表 (按权限过滤) | 登录 |
 | GET | `/api/report/:id` | 查看报表 | `report.{id}:r` |
-| POST/PUT/DELETE | `/api/report[/:id]` | 报表增删改 | `report.manage:rw` |
+| PUT/DELETE | `/api/report/:id` | 报表改/删 | `report.{id}:w` |
+| POST | `/api/report` | 新建报表 | 父级 `:w` / 根建需全局 `report:w` |
 | POST | `/api/report/:id/run` | 执行报表 | `report.{id}:r` |
-| POST | `/api/report/preview` | 模板预览 | `report.manage:rw` |
-| POST | `/api/report/ai` | AI 修改模板 | `report.manage:rw` |
-| POST | `/api/report/:id/share` | 开/关公开分享 | `report.manage:rw` |
+| POST | `/api/report/preview` | 模板预览 | 报表开发者 (任一 `report*:w`) |
+| POST | `/api/report/ai` | AI 修改模板 | 报表开发者 (任一 `report*:w`) |
+| POST | `/api/report/:id/share` | 开/关公开分享 | `report.{id}:w` |
 | GET | `/api/public/report/:token` | 公开: 报表元信息 | 公开 |
 | POST | `/api/public/report/:token/run` | 公开: 执行报表 | 公开 |
 | GET/POST/PUT/DELETE | `/api/user[/:id]` | 用户管理 | 超管 |
@@ -174,12 +184,16 @@ MySQL 数据源可通过 SSH 跳板机连接 (在数据源弹窗中开启「SSH 
   编辑无法篡改 (`Record()` 不含该字段)。
 - 公开页 (`view.html`) 走 `/api/public/report/:token[/run]`, 与登录鉴权完全解耦,
   访客可调过滤器重新查询。仅 `is_public=1` 的报表能被令牌取到。
+- 开启分享时会静态收集并授权报表发布版内容引用的数据源, 之后公开运行按保存的
+  `approved_dsns` allowlist 执行; 缺少该预授权快照的历史分享会被拒绝, 需重新开启分享。
 
 ## 定时任务 (定时 / 告警)
 
 报表可配置**定时任务**: 到点自动跑报表, 把结果推送到群机器人 (飞书 / 企业微信)。
 入口在报表编辑器「报表设置 → 定时任务」, 数据存于 `report_schedule` 表,
-REST 接口在 `/api/report/:id/schedule`(需 `report.manage:rw`)。
+REST 接口在 `/api/report/:id/schedule`(需 `report.{id}:w`)。
+创建/更新/测试任务时会刷新报表发布版内容的 `approved_dsns`; 调度器运行时按该 allowlist
+校验实际触达的数据源。缺少预授权快照的历史任务会失败关闭, 需重新发布报表或保存任务。
 
 **调度**: `job/job.go` 注册了一个 xcron 任务 `ReportScheduleTick`, 每分钟第 0 秒
 触发 `schedule.Tick`(开启 `EnableDistLock`, 多实例只跑一次)。Tick 扫描所有
@@ -259,7 +273,7 @@ ai:
   令牌只存 SHA-256 哈希, 明文仅创建时显示一次; 可设过期。
 - 请求头 `Authorization: Bearer <token>`; SDK 的 `RequireBearerToken` 中间件校验,
   无效令牌返回 401。令牌解析出用户后, **每个工具按该用户的 RBAC 权限判定** ——
-  与 REST 接口同一套权限 (`report.manage:rw`、`dsn:r` 等), AI 不会获得超出本人的权限。
+  与 REST 接口同一套权限 (`report*:w`、`dsn:r` 等), AI 不会获得超出本人的权限。
 
 **工具集** (范围: 只读 + 报表开发, 不含用户/角色/数据源增删):
 
@@ -269,8 +283,9 @@ ai:
 | `list_reports` / `get_report` | 列出/读取报表 (按读权限过滤) | 报表读 |
 | `list_datasources` / `list_databases` / `list_tables` / `describe_table` | 探数据源 schema (脱敏, 不回连接串/密钥) | `dsn:r` |
 | `query_raw` | 只读 SELECT 探数据 (拒非 SELECT/多语句, 限 200 行) | `dsn:r` |
-| `preview_template` | 试跑模板返回结构化结果 (含每块 error), 不落库 | `report.manage:rw` |
-| `create_report` / `update_report` / `publish_report` | 创建/改草稿/发布 | `report.manage:rw` |
+| `preview_template` | 试跑模板返回结构化结果 (含每块 error), 不落库 | 报表开发者 (任一 `report*:w`) |
+| `create_report` | 创建报表/文件夹 | 父级 `:w` / 根建需全局 `report:w` |
+| `update_report` / `publish_report` | 改草稿/发布 | `report.{id}:w` |
 
 **客户端配置**:
 

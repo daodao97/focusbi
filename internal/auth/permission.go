@@ -38,6 +38,31 @@ func (p *Permission) ReportReadable(id int, parents map[int]int, mode string) bo
 	return false
 }
 
+// CanWriteAnyReport 判断本权限是否在【任意范围】拥有报表写权限:
+// 全局 report:w / 任一 report.<id>:w / 文件夹 report.<id>:Rw 皆算。
+// 用于没有具体报表 id 的写入口 (模板预览、AI 改写、根目录建报表、全局定时任务管理页) ——
+// 即回答"这是不是一个报表开发者"。具体某报表能否写仍由 ReportReadable(id, _, "w") 判定。
+func (p *Permission) CanWriteAnyReport() bool {
+	if p == nil {
+		return false
+	}
+	if p.isAdmin {
+		return true
+	}
+	// Check 覆盖: 显式 report:w、以及任意层级的 * / __all 通配写 (matchNode 逐层判通配)。
+	if p.Check("report", "w") {
+		return true
+	}
+	// 补: 具体某报表/文件夹的写 (report.<id>:w / report.*:w), Check("report") 不覆盖这些子节点。
+	found := false
+	walkLeaves(p.tree, nil, func(resource, mode string) {
+		if strings.HasPrefix(resource, "report.") && hasMode(mode, "w") {
+			found = true
+		}
+	})
+	return found
+}
+
 // LoadReportParents 取全部报表的 id->parent_id 映射 (用于祖先链判权)。
 func LoadReportParents() (map[int]int, error) {
 	list, err := dao.ListReports()

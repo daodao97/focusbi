@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 
 	"xproxy/conf"
@@ -14,12 +15,6 @@ import (
 	"xproxy/internal/engine"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
-)
-
-// 权限资源常量 (与 api/setup.go 对齐)。
-const (
-	resReportManage = "report.manage"
-	resDsn          = "dsn"
 )
 
 // queryRawMaxRows 限制 query_raw 返回行数, 避免 AI 拉爆上下文。
@@ -189,19 +184,19 @@ func registerTools(s *mcp.Server) {
 		queryRawTool)
 
 	mcp.AddTool(s, &mcp.Tool{Name: "preview_template",
-		Description: "试跑一段报表模板并返回结构化结果 (含每个区块的错误), 不落库。用于校验模板。需 report.manage 写权限。"},
+		Description: "试跑一段报表模板并返回结构化结果 (含每个区块的错误), 不落库。用于校验模板。需报表写权限。"},
 		previewTemplateTool)
 
 	mcp.AddTool(s, &mcp.Tool{Name: "create_report",
-		Description: "创建一个报表或文件夹。需 report.manage 写权限。"},
+		Description: "创建一个报表或文件夹。需对目标父级有写权限; 根目录需全局 report 写权限。"},
 		createReportTool)
 
 	mcp.AddTool(s, &mcp.Tool{Name: "update_report",
-		Description: "更新报表的开发版草稿/名称/数据源/设置 (只动草稿, 不影响已发布版)。需 report.manage 写权限。"},
+		Description: "更新报表的开发版草稿/名称/数据源/设置 (只动草稿, 不影响已发布版)。需对该报表有写权限。"},
 		updateReportTool)
 
 	mcp.AddTool(s, &mcp.Tool{Name: "publish_report",
-		Description: "把开发版草稿发布为正式版 (查看者与定时任务据此); 同时记录一个版本快照。需 report.manage 写权限。"},
+		Description: "把开发版草稿发布为正式版 (查看者与定时任务据此); 同时记录一个版本快照。需对该报表有写权限。"},
 		publishReportTool)
 }
 
@@ -350,8 +345,8 @@ func previewTemplateTool(ctx context.Context, _ *mcp.CallToolRequest, in preview
 	if err != nil {
 		return nil, previewOut{}, err
 	}
-	if !pr.perm.Check(resReportManage, "rw") {
-		return nil, previewOut{}, fmt.Errorf("无权试跑模板 (需 report.manage 写权限)")
+	if !pr.perm.CanWriteAnyReport() {
+		return nil, previewOut{}, fmt.Errorf("无权试跑模板 (需报表写权限)")
 	}
 	nameToID, err := auth.LoadDsnNameToID()
 	if err != nil {
@@ -371,11 +366,17 @@ func createReportTool(ctx context.Context, _ *mcp.CallToolRequest, in createRepo
 	if err != nil {
 		return nil, idOut{}, err
 	}
-	if !pr.perm.Check(resReportManage, "rw") {
-		return nil, idOut{}, fmt.Errorf("无权创建报表 (需 report.manage 写权限)")
-	}
 	if strings.TrimSpace(in.Name) == "" {
 		return nil, idOut{}, fmt.Errorf("报表名不能为空")
+	}
+	// 指定父级: 须存在、是文件夹且用户可写 (与 REST createReport 一致)。
+	// 根目录 (无父级): 需全局 report:w, 单报表写权限不能扩展到根级全局空间。
+	if in.ParentID != 0 {
+		if err := requireWritableParent(pr, in.ParentID); err != nil {
+			return nil, idOut{}, err
+		}
+	} else if !pr.perm.Check("report", "w") {
+		return nil, idOut{}, fmt.Errorf("无权在根目录创建报表 (需全局报表写权限)")
 	}
 	typ := strings.TrimSpace(in.Type)
 	if typ == "" {
@@ -399,8 +400,8 @@ func updateReportTool(ctx context.Context, _ *mcp.CallToolRequest, in updateRepo
 	if err != nil {
 		return nil, okOut{}, err
 	}
-	if !pr.perm.Check(resReportManage, "rw") {
-		return nil, okOut{}, fmt.Errorf("无权修改报表 (需 report.manage 写权限)")
+	if err := requireReportWrite(pr, in.ID); err != nil {
+		return nil, okOut{}, err
 	}
 	updates := map[string]any{}
 	if in.Name != nil {
@@ -429,16 +430,26 @@ func publishReportTool(ctx context.Context, _ *mcp.CallToolRequest, in publishIn
 	if err != nil {
 		return nil, okOut{}, err
 	}
-	if !pr.perm.Check(resReportManage, "rw") {
-		return nil, okOut{}, fmt.Errorf("无权发布报表 (需 report.manage 写权限)")
+	if err := requireReportWrite(pr, in.ID); err != nil {
+		return nil, okOut{}, err
 	}
-	if err := dao.PublishReport(in.ID); err != nil {
+	r, err := dao.GetReportByID(in.ID)
+	if err != nil {
+		return nil, okOut{}, err
+	}
+	if !r.IsFolder() {
+		if err := validateContentDSNAccess(pr, r.DSN, r.DevContent); err != nil {
+			return nil, okOut{}, err
+		}
+		r.Settings = dao.SettingsWithApprovedDSNs(r.Settings, engine.CollectDSNs(r.DSN, r.DevContent))
+		if err := dao.PublishReportContentWithSettings(in.ID, r.DevContent, r.Settings); err != nil {
+			return nil, okOut{}, err
+		}
+	} else if err := dao.PublishReport(in.ID); err != nil {
 		return nil, okOut{}, err
 	}
 	// 记录版本快照 (与 REST publishReport 行为一致); 失败不阻断发布。
-	if r, e := dao.GetReportByID(in.ID); e == nil {
-		_ = dao.AddReportVersion(in.ID, r.Content, pr.user.Id, pr.user.Nick)
-	}
+	_ = dao.AddReportVersion(in.ID, r.DevContent, pr.user.Id, pr.user.Nick)
 	return nil, okOut{OK: true}, nil
 }
 
@@ -459,6 +470,70 @@ func reportEditURL(r *dao.ReportRecord) string {
 		return u + "/edit"
 	}
 	return ""
+}
+
+// requireReportWrite 校验调用者对某报表有写权限 (report.<id>:w 或祖先文件夹递归 Rw)。
+// 与 REST 侧 canWriteReport 对称。
+func requireReportWrite(pr *principal, id int) error {
+	parents, err := auth.LoadReportParents()
+	if err != nil {
+		return err
+	}
+	if !pr.perm.ReportReadable(id, parents, "w") {
+		return fmt.Errorf("无权修改该报表")
+	}
+	return nil
+}
+
+// requireWritableParent 校验目标父级合法且可写 (与 REST requireWritableParent 对称):
+// parentID==0 (根) 时调用方另行校验全局 report:w; 否则父级须存在、是文件夹、且用户可写。
+// 防止把报表建到普通报表下、或借过期的 report.<id>:w 建到已不存在的父级下。
+func requireWritableParent(pr *principal, parentID int) error {
+	if parentID == 0 {
+		return nil
+	}
+	list, err := dao.ListReports()
+	if err != nil {
+		return err
+	}
+	var parent *dao.ReportRecord
+	parents := make(map[int]int, len(list))
+	for _, x := range list {
+		parents[x.Id] = x.ParentID
+		if x.Id == parentID {
+			parent = x
+		}
+	}
+	if parent == nil || !parent.IsFolder() {
+		return fmt.Errorf("父级不存在或不是文件夹")
+	}
+	if !pr.perm.ReportReadable(parentID, parents, "w") {
+		return fmt.Errorf("无权在该目录下创建报表")
+	}
+	return nil
+}
+
+func validateContentDSNAccess(pr *principal, dsn, content string) error {
+	nameToID, err := auth.LoadDsnNameToID()
+	if err != nil {
+		return err
+	}
+	authz := pr.perm.DsnAuthz(nameToID)
+	denied := map[string]bool{}
+	for _, name := range engine.CollectDSNs(dsn, content) {
+		if err := authz(name); err != nil {
+			denied[name] = true
+		}
+	}
+	if len(denied) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(denied))
+	for name := range denied {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return fmt.Errorf("报表内容引用了无权使用的数据源: %s", strings.Join(names, ", "))
 }
 
 // requireDsnReadByName 校验调用者对某数据源 (按名) 有读权限 (dsn.<id> 或全局 dsn)。

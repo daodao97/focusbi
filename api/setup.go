@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sort"
 	"strconv"
+	"strings"
 
 	"xproxy/dao"
 	"xproxy/internal/ai"
@@ -19,15 +21,12 @@ import (
 
 // 资源串约定:
 //
-//	report           全部报表 (列表/查看默认资源)
-//	report.{id}      单个报表
-//	report.manage    报表的建/改/删 (rw)
+//	report           全部报表 (r 读 / w 写, 通常带 R 递归覆盖所有报表)
+//	report.{id}      单个报表或文件夹 (文件夹带 R 递归覆盖后代)
 //	dsn              数据源 (读: 查看/取结构; 写: 增删改)
-const (
-	resReport       = "report"
-	resReportManage = "report.manage"
-	resDsn          = "dsn"
-)
+//
+// 报表写权限是单一维度: 有 report*:w 即可写对应范围的报表, 无需再单列"管理"开关。
+const resDsn = "dsn"
 
 // Setup 注册报表系统的 REST 接口与前端页面。
 func Setup(e *gin.Engine) {
@@ -68,37 +67,40 @@ func Setup(e *gin.Engine) {
 		authed.GET("/dsn/:name/tables", listTables)
 		authed.GET("/dsn/:name/columns", listColumns)
 
-		// 报表: 列表按权限过滤; 单个报表按 report.{id} 校验; 增删改需 report.manage:rw
+		// 报表权限单一维度: report / report.{id} 的 r/w (含文件夹 R 递归)。
+		// - 读: 列表按权限过滤; 单报表校验 report.{id}:r。
+		// - 写: 带 id 的接口在 handler 内按 report.{id}:w 判权; 无 id 的写入口
+		//   先用 RequireReportWriter 校验"是否报表开发者", 根级创建/移动再要求 report:w。
+		writer := auth.RequireReportWriter()
 		authed.GET("/report", listReports)
 		authed.GET("/report/:id", getReport)
-		authed.POST("/report", auth.Require(resReportManage, "rw"), createReport)
-		authed.PUT("/report/:id", auth.Require(resReportManage, "rw"), updateReport)
-		authed.DELETE("/report/:id", auth.Require(resReportManage, "rw"), deleteReport)
-		authed.POST("/report/:id/publish", auth.Require(resReportManage, "rw"), publishReport)
-		// 版本历史 / 回滚 (需 report.manage:rw)
-		authed.GET("/report/:id/version", auth.Require(resReportManage, "rw"), listReportVersions)
-		authed.GET("/report/:id/version/:vid", auth.Require(resReportManage, "rw"), getReportVersion)
-		authed.POST("/report/:id/version/:vid/rollback", auth.Require(resReportManage, "rw"), rollbackReport)
+		authed.POST("/report", writer, createReport)
+		authed.PUT("/report/:id", writer, updateReport)
+		authed.DELETE("/report/:id", writer, deleteReport)
+		authed.POST("/report/:id/publish", writer, publishReport)
+		// 版本历史 / 回滚: 读版本需 report.{id}:r, 回滚需 report.{id}:w (handler 内判)
+		authed.GET("/report/:id/version", listReportVersions)
+		authed.GET("/report/:id/version/:vid", getReportVersion)
+		authed.POST("/report/:id/version/:vid/rollback", writer, rollbackReport)
 		authed.POST("/report/:id/run", runReport)
-		authed.POST("/report/preview", auth.Require(resReportManage, "rw"), previewReport)
-		authed.POST("/report/ai", auth.Require(resReportManage, "rw"), aiModify)
-		authed.POST("/report/ai/stream", auth.Require(resReportManage, "rw"), aiModifyStream)
-		// 分享开关: 需 report.manage:rw
-		authed.POST("/report/:id/share", auth.Require(resReportManage, "rw"), setReportShare)
-		// 侧边菜单可见性开关: 需 report.manage:rw
-		authed.POST("/report/:id/visible", auth.Require(resReportManage, "rw"), setReportVisible)
-		// 拖拽排序/移动: 批量更新 parent_id + sort
-		authed.POST("/report/reorder", auth.Require(resReportManage, "rw"), reorderReports)
+		authed.POST("/report/preview", writer, previewReport)
+		authed.POST("/report/ai", writer, aiModify)
+		authed.POST("/report/ai/stream", writer, aiModifyStream)
+		// 分享开关 / 侧边菜单可见性: handler 内按 report.{id}:w 判权
+		authed.POST("/report/:id/share", writer, setReportShare)
+		authed.POST("/report/:id/visible", writer, setReportVisible)
+		// 拖拽排序/移动: handler 内对每个被移动节点 + 目标父级按 report.{id}:w 判权
+		authed.POST("/report/reorder", writer, reorderReports)
 
-		// 报表定时任务 (飞书/企微推送): 需 report.manage:rw
-		// 全局任务管理页列表 (静态段, 须排在 /report/:id 相关路由前)
-		authed.GET("/report/schedules", auth.Require(resReportManage, "rw"), listAllSchedules)
-		authed.GET("/report/:id/schedule", auth.Require(resReportManage, "rw"), listSchedules)
-		authed.POST("/report/:id/schedule", auth.Require(resReportManage, "rw"), createSchedule)
-		authed.GET("/report/:id/schedule/:sid", auth.Require(resReportManage, "rw"), getSchedule)
-		authed.PUT("/report/:id/schedule/:sid", auth.Require(resReportManage, "rw"), updateSchedule)
-		authed.DELETE("/report/:id/schedule/:sid", auth.Require(resReportManage, "rw"), deleteSchedule)
-		authed.POST("/report/:id/schedule/:sid/test", auth.Require(resReportManage, "rw"), testSchedule)
+		// 报表定时任务 (飞书/企微推送): 带 id 的在 handler 内按 report.{id}:w 判权。
+		// 全局任务管理页列表 (静态段, 须排在 /report/:id 相关路由前) 需报表写权限。
+		authed.GET("/report/schedules", writer, listAllSchedules)
+		authed.GET("/report/:id/schedule", listSchedules)
+		authed.POST("/report/:id/schedule", createSchedule)
+		authed.GET("/report/:id/schedule/:sid", getSchedule)
+		authed.PUT("/report/:id/schedule/:sid", updateSchedule)
+		authed.DELETE("/report/:id/schedule/:sid", deleteSchedule)
+		authed.POST("/report/:id/schedule/:sid/test", testSchedule)
 
 		// 用户 / 角色管理: 仅管理员
 		admin := authed.Group("", auth.RequireAdmin())
@@ -180,9 +182,10 @@ func updateDsn(c *gin.Context) {
 		fail(c, http.StatusBadRequest, err.Error())
 		return
 	}
-	// 取旧记录以便失效旧的连接/隧道缓存 (名称可能变更)
+	// 取旧记录: 失效旧连接/隧道缓存 (名称可能变更) + 补回前端未改动的脱敏凭据 (**** 占位)。
 	if old, err := dao.GetDsnByID(id); err == nil {
 		datasource.Invalidate(old.Name)
+		r.MergeSecretsFrom(old)
 	}
 	if err := dao.UpdateDsnByID(id, r.Record()); err != nil {
 		fail(c, http.StatusInternalServerError, err.Error())
@@ -212,6 +215,12 @@ func testDsn(c *gin.Context) {
 	if err := c.ShouldBindJSON(&r); err != nil {
 		fail(c, http.StatusBadRequest, err.Error())
 		return
+	}
+	// 编辑既有数据源时 (带 id), 前端表单里的凭据是脱敏占位; 用库中原值补回后再连。
+	if r.Id != 0 {
+		if old, err := dao.GetDsnByID(r.Id); err == nil {
+			r.MergeSecretsFrom(old)
+		}
 	}
 	if err := datasource.PingRecord(&r); err != nil {
 		fail(c, http.StatusBadRequest, "连接失败: "+err.Error())
@@ -287,6 +296,27 @@ func requireDsnReadByName(c *gin.Context, name string) bool {
 	return true
 }
 
+func authorizeReportContentDSNs(c *gin.Context, dsn, content string) ([]string, bool) {
+	authz := dsnAuthzOf(c)
+	dsns := engine.CollectDSNs(dsn, content)
+	denied := make([]string, 0)
+	for _, name := range dsns {
+		if err := authz(name); err != nil {
+			denied = append(denied, name)
+		}
+	}
+	if len(denied) == 0 {
+		return dsns, true
+	}
+	sort.Strings(denied)
+	fail(c, http.StatusForbidden, "报表内容引用了无权使用的数据源: "+strings.Join(denied, ", "))
+	return nil, false
+}
+
+func approveReportDSNs(reportID int, settings string, dsns []string) error {
+	return dao.UpdateReportByID(reportID, xdb.Record{"settings": dao.SettingsWithApprovedDSNs(settings, dsns)})
+}
+
 // ---- Report ----
 
 // reportReadable 复用 auth 包的祖先链判权 (api 与 mcpserver 共用同一逻辑)。
@@ -314,6 +344,72 @@ func canReadReport(c *gin.Context, id int) bool {
 		return false
 	}
 	return reportReadable(auth.PermOf(c), id, parents, "r")
+}
+
+// canWriteReport 判断当前用户能否写某报表 (report.<id>:w 或祖先文件夹递归 Rw)。
+// 与 canReadReport 对称, 是报表写权限的唯一判据。
+func canWriteReport(c *gin.Context, id int) bool {
+	parents, _, err := loadParentMap()
+	if err != nil {
+		return false
+	}
+	return reportReadable(auth.PermOf(c), id, parents, "w")
+}
+
+// requireReportWrite 校验写权限, 无则写 403 并返回 false。
+func requireReportWrite(c *gin.Context, id int) bool {
+	if !canWriteReport(c, id) {
+		fail(c, http.StatusForbidden, "无权修改该报表")
+		return false
+	}
+	return true
+}
+
+// requireReportRead 校验读权限, 无则写 403 并返回 false。
+func requireReportRead(c *gin.Context, id int) bool {
+	if !canReadReport(c, id) {
+		fail(c, http.StatusForbidden, "无权访问该报表")
+		return false
+	}
+	return true
+}
+
+func requireRootReportWrite(c *gin.Context) bool {
+	if p := auth.PermOf(c); p != nil && p.Check("report", "w") {
+		return true
+	}
+	fail(c, http.StatusForbidden, "无权在根目录下操作报表")
+	return false
+}
+
+// requireWritableParent 校验目标父级 parentID 合法且用户可写 (create/update/move 共用)。
+// parentID==0 表示根目录, 需全局 report:w; 单报表写权限不能扩展到根级全局空间。
+// 无则写对应错误并返回 false。
+func requireWritableParent(c *gin.Context, parentID int) bool {
+	if parentID == 0 {
+		return requireRootReportWrite(c)
+	}
+	parents, list, err := loadParentMap()
+	if err != nil {
+		fail(c, http.StatusInternalServerError, err.Error())
+		return false
+	}
+	var parent *dao.ReportRecord
+	for _, x := range list {
+		if x.Id == parentID {
+			parent = x
+			break
+		}
+	}
+	if parent == nil || !parent.IsFolder() {
+		fail(c, http.StatusBadRequest, "父级不存在或不是文件夹")
+		return false
+	}
+	if !reportReadable(auth.PermOf(c), parentID, parents, "w") {
+		fail(c, http.StatusForbidden, "无权在该目录下操作报表")
+		return false
+	}
+	return true
 }
 
 func listReports(c *gin.Context) {
@@ -388,6 +484,10 @@ func createReport(c *gin.Context) {
 		fail(c, http.StatusBadRequest, err.Error())
 		return
 	}
+	// 指定父级时: 父级须为存在的文件夹且用户对其有写权限 (防在无权目录下建报表)。
+	if !requireWritableParent(c, r.ParentID) {
+		return
+	}
 	id, err := dao.CreateReport(&r)
 	if err != nil {
 		fail(c, http.StatusInternalServerError, err.Error())
@@ -401,10 +501,21 @@ func updateReport(c *gin.Context) {
 	if !valid {
 		return
 	}
+	if !requireReportWrite(c, id) {
+		return
+	}
 	var r dao.ReportRecord
 	if err := c.ShouldBindJSON(&r); err != nil {
 		fail(c, http.StatusBadRequest, err.Error())
 		return
+	}
+	// Record() 会写 parent_id, 即更新也能移动报表; 若本次改变了父级, 需与 create/reorder 一致
+	// 校验新父级合法且可写, 否则可借 PUT 把报表移进无权目录或挂到非文件夹节点下。
+	// 仅在父级真正变更时校验: 否则对 report.<id>:w (父文件夹无权) 的用户会误伤正常编辑。
+	if old, err := dao.GetReportByID(id); err == nil && old.ParentID != r.ParentID {
+		if !requireWritableParent(c, r.ParentID) {
+			return
+		}
 	}
 	if err := dao.UpdateReportByID(id, r.Record()); err != nil {
 		fail(c, http.StatusInternalServerError, err.Error())
@@ -417,6 +528,9 @@ func updateReport(c *gin.Context) {
 func setReportVisible(c *gin.Context) {
 	id, valid := paramID(c)
 	if !valid {
+		return
+	}
+	if !requireReportWrite(c, id) {
 		return
 	}
 	var req struct {
@@ -439,15 +553,31 @@ func publishReport(c *gin.Context) {
 	if !valid {
 		return
 	}
-	if err := dao.PublishReport(id); err != nil {
+	if !requireReportWrite(c, id) {
+		return
+	}
+	r, err := dao.GetReportByID(id)
+	if err != nil {
+		fail(c, http.StatusNotFound, "报表不存在")
+		return
+	}
+	if !r.IsFolder() {
+		dsns, ok := authorizeReportContentDSNs(c, r.DSN, r.DevContent)
+		if !ok {
+			return
+		}
+		r.Settings = dao.SettingsWithApprovedDSNs(r.Settings, dsns)
+		if err := dao.PublishReportContentWithSettings(id, r.DevContent, r.Settings); err != nil {
+			fail(c, http.StatusInternalServerError, err.Error())
+			return
+		}
+	} else if err := dao.PublishReport(id); err != nil {
 		fail(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 	// 记录发布版本 (失败不阻断发布本身, 仅影响历史)
-	if r, err := dao.GetReportByID(id); err == nil {
-		uid, nick := currentUser(c)
-		_ = dao.AddReportVersion(id, r.Content, uid, nick)
-	}
+	uid, nick := currentUser(c)
+	_ = dao.AddReportVersion(id, r.DevContent, uid, nick)
 	ok(c, gin.H{"id": id})
 }
 
@@ -470,6 +600,9 @@ func listReportVersions(c *gin.Context) {
 	if !valid {
 		return
 	}
+	if !requireReportRead(c, id) {
+		return
+	}
 	list, err := dao.ListReportVersions(id)
 	if err != nil {
 		fail(c, http.StatusInternalServerError, err.Error())
@@ -482,6 +615,9 @@ func listReportVersions(c *gin.Context) {
 func getReportVersion(c *gin.Context) {
 	id, valid := paramID(c)
 	if !valid {
+		return
+	}
+	if !requireReportRead(c, id) {
 		return
 	}
 	vid, ok2 := paramVID(c)
@@ -500,6 +636,9 @@ func getReportVersion(c *gin.Context) {
 func rollbackReport(c *gin.Context) {
 	id, valid := paramID(c)
 	if !valid {
+		return
+	}
+	if !requireReportWrite(c, id) {
 		return
 	}
 	vid, ok2 := paramVID(c)
@@ -531,6 +670,9 @@ func paramVID(c *gin.Context) (int, bool) {
 func deleteReport(c *gin.Context) {
 	id, valid := paramID(c)
 	if !valid {
+		return
+	}
+	if !requireReportWrite(c, id) {
 		return
 	}
 	// 文件夹非空时禁止删除 (需先清空或移走子节点)
@@ -575,9 +717,29 @@ func reorderReports(c *gin.Context) {
 	}
 	typeOf := make(map[int]string, len(all))
 	parentOf := make(map[int]int, len(all))
+	origParents := make(map[int]int, len(all))
 	for _, r := range all {
 		typeOf[r.Id] = r.Type
 		parentOf[r.Id] = r.ParentID
+		origParents[r.Id] = r.ParentID
+	}
+
+	// 每个被移动的节点都要有写权限 (按其当前位置的祖先链判定), 且目标父级也要可写
+	// (移动到根目录需全局 report:w), 否则报表开发者可把无权报表移进/移出自己的目录。
+	p := auth.PermOf(c)
+	for _, it := range req.Items {
+		if !reportReadable(p, it.ID, origParents, "w") {
+			fail(c, http.StatusForbidden, "无权移动该报表")
+			return
+		}
+		if it.ParentID == 0 {
+			if !requireRootReportWrite(c) {
+				return
+			}
+		} else if !reportReadable(p, it.ParentID, origParents, "w") {
+			fail(c, http.StatusForbidden, "无权移动到该目标目录")
+			return
+		}
 	}
 
 	// isDescendant 判断 ancestor 是否为 node 的祖先 (用更新后的 parentOf, 防环)。

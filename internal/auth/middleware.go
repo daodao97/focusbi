@@ -56,6 +56,20 @@ func Require(resource, mode string) gin.HandlerFunc {
 	}
 }
 
+// RequireReportWriter 返回一个守卫: 要求当前用户在任意范围拥有报表写权限
+// (即"是报表开发者"), 否则 403。用于没有具体报表 id 的写入口 (模板预览、AI 改写、
+// 根目录建报表、全局定时任务管理页)。具体某报表能否写由 handler 内 requireReportWrite 判定。
+func RequireReportWriter() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		p := PermOf(c)
+		if p == nil || !p.CanWriteAnyReport() {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"code": 1, "msg": "无权限: 需要报表写权限"})
+			return
+		}
+		c.Next()
+	}
+}
+
 // RequireAdmin 要求当前用户为超管。
 func RequireAdmin() gin.HandlerFunc {
 	return func(c *gin.Context) {
