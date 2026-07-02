@@ -30,6 +30,25 @@ func TestDueAt(t *testing.T) {
 	}
 }
 
+func TestSilenced(t *testing.T) {
+	now := time.Date(2026, 7, 2, 10, 0, 0, 0, time.UTC)
+	recent := now.Add(-5 * time.Minute)
+	old := now.Add(-2 * time.Hour)
+
+	if silenced(0, &recent, now) {
+		t.Error("silence_minutes=0 不应静默")
+	}
+	if silenced(30, nil, now) {
+		t.Error("从未告警过不应静默")
+	}
+	if !silenced(30, &recent, now) {
+		t.Error("5 分钟前告警过、静默期 30 分钟, 应静默")
+	}
+	if silenced(30, &old, now) {
+		t.Error("2 小时前告警、静默期 30 分钟, 不应静默")
+	}
+}
+
 func TestRenderText(t *testing.T) {
 	r := &engine.Result{
 		Blocks: []engine.Block{

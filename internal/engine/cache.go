@@ -23,6 +23,14 @@ type cacheEntry struct {
 	expires time.Time
 }
 
+// 容量上限: 防止长 TTL + 大结果集把内存稳定占满。超限的结果直接不缓存 (每次查库),
+// 缓存满时不淘汰未过期项 (新键不缓存)。var 便于测试覆写。
+// ponytail: 简单硬上限, 命中率不够再上 LRU。
+var (
+	maxCacheEntries = 500  // 缓存条目数上限
+	maxCacheRows    = 5000 // 单结果可缓存的行数上限
+)
+
 var (
 	queryCacheMu sync.Mutex
 	queryCache   = map[string]cacheEntry{}
@@ -58,10 +66,15 @@ func cachedQuery(dsn, sql string, ttlSec int, bypass bool, args ...any) (*dataso
 	if err != nil {
 		return nil, err
 	}
+	if len(res.Rows) > maxCacheRows {
+		return res, nil // 结果过大不缓存
+	}
 
 	queryCacheMu.Lock()
-	queryCache[key] = cacheEntry{res: cloneQueryResult(res), expires: now.Add(time.Duration(ttlSec) * time.Second)}
 	pruneExpiredLocked(now)
+	if _, exists := queryCache[key]; exists || len(queryCache) < maxCacheEntries {
+		queryCache[key] = cacheEntry{res: cloneQueryResult(res), expires: now.Add(time.Duration(ttlSec) * time.Second)}
+	}
 	queryCacheMu.Unlock()
 	return res, nil
 }

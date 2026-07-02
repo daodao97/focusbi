@@ -44,7 +44,7 @@ const blank = () => ({
   action: 'webhook', // none 只跑不推 / webhook 推群机器人
   channel: 'lark', webhook: '', params: {}, enabled: true,
   // 阈值告警
-  alarm: false, condition: { block: '', column: '', agg: 'any', op: '<', value: '' }
+  alarm: false, condition: { block: '', column: '', agg: 'any', op: '<', value: '', silence_minutes: 0 }
 })
 const form = reactive(blank())
 const saving = ref(false)
@@ -73,7 +73,7 @@ watch(() => props.modelValue, async (open) => {
       if (full.params) form.params = { ...full.params }
       if (full.condition && full.condition.column) {
         form.alarm = true
-        form.condition = { block: '', agg: 'any', op: '<', value: '', ...full.condition }
+        form.condition = { block: '', agg: 'any', op: '<', value: '', silence_minutes: 0, ...full.condition }
       }
     } catch {
       form.webhook = ''
@@ -110,7 +110,7 @@ async function loadPreviewContent(content, dsn) {
 function onPickReport(rid) {
   form.report_id = rid
   form.params = {}
-  form.condition = { block: '', column: '', agg: 'any', op: '<', value: '' }
+  form.condition = { block: '', column: '', agg: 'any', op: '<', value: '', silence_minutes: 0 }
   loadPreview(rid)
 }
 
@@ -129,7 +129,7 @@ async function submit() {
     const rid = form.report_id || props.reportId
     // none 动作不推送: 不下发 condition; 否则 alarm 开启才下发 condition。
     const condition = (form.action !== 'none' && form.alarm)
-      ? { block: form.condition.block, column: form.condition.column, agg: form.condition.agg, op: form.condition.op, value: String(form.condition.value) }
+      ? { block: form.condition.block, column: form.condition.column, agg: form.condition.agg, op: form.condition.op, value: String(form.condition.value), silence_minutes: Number(form.condition.silence_minutes) || 0 }
       : null
     const body = { name: form.name, cron: form.cron, action: form.action, channel: form.channel, webhook: form.webhook, params: form.params, enabled: form.enabled, condition }
     if (form.id) await api.updateSchedule(rid, form.id, body)
@@ -215,6 +215,10 @@ async function submit() {
             <el-input v-model="form.condition.value" placeholder="阈值" style="flex:1;min-width:80px" />
           </div>
           <div class="form-hint">如「任一行 gmv &lt; 10000」或「sum 金额 &lt; 5000」时触发推送。</div>
+        </el-form-item>
+        <el-form-item label="静默期">
+          <el-input-number v-model="form.condition.silence_minutes" :min="0" :step="10" style="width:130px" />
+          <div class="form-hint">分钟。推送一次告警后, 静默期内再命中不重复推送; 0 = 每次命中都推。</div>
         </el-form-item>
       </template>
       <el-form-item label="启用">

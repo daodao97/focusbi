@@ -19,20 +19,21 @@ const (
 
 // ScheduleRecord 是报表定时任务: 到点跑报表并把结果推送到群机器人。
 type ScheduleRecord struct {
-	Id         int                `json:"id"`
-	ReportID   int                `json:"report_id"`
-	Name       string             `json:"name"`
-	Cron       string             `json:"cron"`                // 标准 5 段 cron (不含秒)
-	Action     string             `json:"action"`              // none 只跑不推 / webhook 推群机器人
-	Channel    string             `json:"channel"`             // lark / wework
-	Webhook    string             `json:"webhook"`             // 群机器人 webhook 完整地址
-	Params     map[string]string  `json:"params"`              // 固定过滤参数
-	Condition  *ScheduleCondition `json:"condition,omitempty"` // 触发条件; nil=定时推送
-	Enabled    bool               `json:"enabled"`
-	LastRunAt  *time.Time         `json:"last_run_at,omitempty"`
-	LastStatus string             `json:"last_status"`
-	CreatedAt  time.Time          `json:"created_at"`
-	UpdatedAt  time.Time          `json:"updated_at"`
+	Id          int                `json:"id"`
+	ReportID    int                `json:"report_id"`
+	Name        string             `json:"name"`
+	Cron        string             `json:"cron"`                // 标准 5 段 cron (不含秒)
+	Action      string             `json:"action"`              // none 只跑不推 / webhook 推群机器人
+	Channel     string             `json:"channel"`             // lark / wework
+	Webhook     string             `json:"webhook"`             // 群机器人 webhook 完整地址
+	Params      map[string]string  `json:"params"`              // 固定过滤参数
+	Condition   *ScheduleCondition `json:"condition,omitempty"` // 触发条件; nil=定时推送
+	Enabled     bool               `json:"enabled"`
+	LastRunAt   *time.Time         `json:"last_run_at,omitempty"`
+	LastAlarmAt *time.Time         `json:"last_alarm_at,omitempty"` // 上次告警推送时间 (静默期判断)
+	LastStatus  string             `json:"last_status"`
+	CreatedAt   time.Time          `json:"created_at"`
+	UpdatedAt   time.Time          `json:"updated_at"`
 }
 
 // ScheduleCondition 是阈值告警的触发条件: 对目标列按聚合方式取值, 与阈值比较, 命中才推送。
@@ -42,6 +43,9 @@ type ScheduleCondition struct {
 	Agg    string `json:"agg"`             // any / first / sum / max / min / count
 	Op     string `json:"op"`              // = != > >= < <=
 	Value  string `json:"value"`           // 比较阈值
+	// SilenceMinutes 是告警静默期 (分钟): 推送一次后, 静默期内再命中不重复推送。
+	// 0 = 不静默 (每次命中都推, 兼容旧行为)。
+	SilenceMinutes int `json:"silence_minutes,omitempty"`
 }
 
 func (s *ScheduleRecord) Record() xdb.Record {
@@ -97,6 +101,7 @@ func (s *ScheduleRecord) FromRecord(record xdb.Record) {
 	}
 	s.Enabled = record.GetInt("enabled") != 0
 	s.LastRunAt = record.GetTime("last_run_at")
+	s.LastAlarmAt = record.GetTime("last_alarm_at")
 	s.LastStatus = record.GetString("last_status")
 	if t := record.GetTime("created_at"); t != nil {
 		s.CreatedAt = *t
@@ -214,6 +219,18 @@ func ClaimScheduleRun(id int, minute time.Time) (bool, error) {
 		),
 	)
 	return ok, err
+}
+
+// TouchScheduleAlarm 记录一次告警推送时间 (静默期起点)。
+func TouchScheduleAlarm(id int, at time.Time) error {
+	if Schedule == nil {
+		return fmt.Errorf("schedule model not initialized")
+	}
+	_, err := Schedule.Update(
+		xdb.Record{"last_alarm_at": at.Format("2006-01-02 15:04:05")},
+		xdb.WhereEq("id", id),
+	)
+	return err
 }
 
 // FinishScheduleRun 记录一次执行的最终结果 (不改 last_run_at, 抢占时已设)。

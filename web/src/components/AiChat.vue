@@ -235,6 +235,15 @@ function onKeydown(e) {
           {{ toolUsed ? 'tool call' : '文本解析' }}
         </el-tag>
       </div>
+      <el-alert
+        v-if="pending.issues && pending.issues.length"
+        type="warning"
+        :closable="false"
+        class="proposal-issues">
+        <div v-for="(iss, i) in pending.issues" :key="i">
+          区块 {{ iss.block_id || '#' + iss.block_index }}: {{ iss.message }}
+        </div>
+      </el-alert>
       <el-tabs type="border-card" class="proposal-tabs">
         <el-tab-pane label="Patch">
           <pre class="proposal-code">{{ pending.patch || streamText }}</pre>
@@ -293,6 +302,7 @@ function onKeydown(e) {
 .proposal { border: 1px solid var(--el-border-color); border-radius: 8px; padding: 8px; margin-top: 8px; background: var(--el-bg-color); }
 .proposal-head { display: flex; align-items: center; justify-content: space-between; font-size: 13px; font-weight: 600; margin-bottom: 8px; }
 .proposal-tabs { --el-tabs-header-height: 32px; }
+.proposal-issues { margin-bottom: 8px; font-size: 12px; }
 .proposal-code { margin: 0; max-height: 220px; overflow: auto; white-space: pre-wrap; word-break: break-word; font-family: Monaco, Consolas, monospace; font-size: 12px; line-height: 1.45; }
 .proposal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 8px; }
 .ctx { margin-top: 8px; }

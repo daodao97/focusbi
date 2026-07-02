@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 
+	"xproxy/conf"
+
 	"github.com/dop251/goja"
 	"github.com/spf13/cast"
 )
@@ -174,7 +176,7 @@ func injectScriptAPI(vm *goja.Runtime, ctx scriptContext, acc *scriptResult) {
 		return vm.ToValue(formatDateCell(v, f))
 	})
 
-	// fetch(url, opts?) -> {status, body, json()}  (任意外呼, 仅内网信任环境)
+	// fetch(url, opts?) -> {status, body, json()}  (外呼权限由 engine.script_fetch 控制)
 	_ = vm.Set("fetch", func(call goja.FunctionCall) goja.Value {
 		return scriptFetch(vm, call)
 	})
@@ -666,6 +668,10 @@ func columnsForJS(cols []Column) []map[string]any {
 // scriptFetch 实现 fetch(url, opts?) -> {status, body, json()}。
 func scriptFetch(vm *goja.Runtime, call goja.FunctionCall) goja.Value {
 	url := call.Argument(0).String()
+	// SSRF 防护: 按 engine.script_fetch 配置校验目标 (off / 前缀白名单 / 默认放行)。
+	if err := conf.Get().ScriptFetchAllowed(url); err != nil {
+		panic(vm.ToValue(err.Error()))
+	}
 	method := "GET"
 	var bodyReader io.Reader
 	headers := map[string]string{}

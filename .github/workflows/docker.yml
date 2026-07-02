@@ -15,7 +15,33 @@ env:
   IMAGE_NAME: ${{ github.repository }} # <owner>/<repo>
 
 jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      # web/dist 不入库, 但 go:embed 编译需要; 测试不触达前端, 放个占位文件即可
+      - name: Stub web/dist
+        run: mkdir -p web/dist && touch web/dist/index.html
+
+      - name: gofmt check
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "以下文件未经 gofmt 格式化:" && echo "$unformatted" && exit 1
+          fi
+
+      - name: go test
+        run: go test ./...
+
   build-push:
+    needs: test
     runs-on: ubuntu-latest
     permissions:
       contents: read

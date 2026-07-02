@@ -47,8 +47,8 @@ func runOne(sub *dao.ScheduleRecord) {
 	status := "ok"
 	if err := Execute(sub); err != nil {
 		status = err.Error()
-		// 条件未命中是正常跳过, 不算错误。
-		if !errors.Is(err, ErrNotTriggered) {
+		// 条件未命中 / 静默期内是正常跳过, 不算错误。
+		if !errors.Is(err, ErrNotTriggered) && !errors.Is(err, ErrSilenced) {
 			xlog.Error("schedule execute failed",
 				xlog.Int("id", sub.Id), xlog.String("err", status))
 		}

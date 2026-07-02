@@ -49,6 +49,11 @@ type EngineConf struct {
 	// QueryConcurrency 同一报表内独立 SQL 区块的并发查询数 (worker 池大小)。
 	// <=0 时回退默认值; 设为 1 即退回逐块串行执行。
 	QueryConcurrency int `json:"query_concurrency" yaml:"query_concurrency" env:"QUERY_CONCURRENCY"`
+	// ScriptFetch 控制报表脚本里 fetch() 的外呼权限 (SSRF 面):
+	//   "" / "on"  -> 允许任意外呼 (兼容旧行为, 仅内网信任环境)
+	//   "off"      -> 禁用 fetch
+	//   其它       -> 逗号分隔的 URL 前缀白名单, 如 "https://api.example.com,https://open.feishu.cn"
+	ScriptFetch string `json:"script_fetch" yaml:"script_fetch" env:"SCRIPT_FETCH"`
 }
 
 type Conf struct {
@@ -100,6 +105,33 @@ func (c *Conf) QueryConcurrency() int {
 		return defaultQueryConcurrency
 	}
 	return c.Engine.QueryConcurrency
+}
+
+// ScriptFetchAllowed 判断脚本 fetch() 是否允许请求该 URL (见 EngineConf.ScriptFetch)。
+func (c *Conf) ScriptFetchAllowed(url string) error {
+	mode := ""
+	if c != nil {
+		mode = strings.TrimSpace(c.Engine.ScriptFetch)
+	}
+	switch strings.ToLower(mode) {
+	case "", "on":
+		return nil
+	case "off":
+		return fmt.Errorf("脚本 fetch 已禁用 (engine.script_fetch=off)")
+	}
+	for _, prefix := range strings.Split(mode, ",") {
+		prefix = strings.TrimSpace(prefix)
+		if prefix == "" || !strings.HasPrefix(url, prefix) {
+			continue
+		}
+		// 前缀须止于边界, 防 "https://api.example.com" 放行 "https://api.example.com.evil.com"。
+		rest := url[len(prefix):]
+		if rest == "" || strings.HasSuffix(prefix, "/") ||
+			rest[0] == '/' || rest[0] == '?' || rest[0] == '#' || rest[0] == ':' {
+			return nil
+		}
+	}
+	return fmt.Errorf("脚本 fetch 目标不在白名单内 (engine.script_fetch): %s", url)
 }
 
 var ConfInstance *Conf

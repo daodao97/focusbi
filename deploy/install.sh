@@ -196,6 +196,8 @@ redis:
 
 engine:
   query_timeout: $(yaml_dq "$query_timeout")
+  # 脚本 fetch() 外呼权限: 空/"on" 任意外呼; "off" 禁用; 或逗号分隔的 URL 前缀白名单
+  script_fetch: ""
 
 ai:
   provider: ""

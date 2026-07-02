@@ -13,6 +13,7 @@ import (
 
 	"xproxy/conf"
 	"xproxy/docs"
+	"xproxy/internal/engine"
 )
 
 // Message 是一条对话消息 (传给 provider)。
@@ -34,6 +35,9 @@ type Proposal struct {
 	Raw      string `json:"raw,omitempty"`
 	Applied  int    `json:"applied"`
 	ToolCall bool   `json:"tool_call"`
+	// Issues 是对 Content 的静态校验结果 (engine.Validate, 不连库):
+	// 非法只读 SQL / 截断的模板等在确认前就暴露给用户, 而非保存后运行才报错。
+	Issues []engine.ValidationIssue `json:"issues,omitempty"`
 }
 
 // systemPrompt 内嵌完整的报表模板语法文档 (docs/SYNTAX.md) 作为权威依据,
@@ -106,14 +110,21 @@ func ProposeTemplate(ctx context.Context, history []Turn, current, instruction, 
 		return nil, fmt.Errorf("AI 未按 diff/tool 协议返回修改内容")
 	}
 	if full != "" {
-		return &Proposal{Content: full, Patch: patch, Raw: out, ToolCall: toolCall}, nil
+		return validated(&Proposal{Content: full, Patch: patch, Raw: out, ToolCall: toolCall}), nil
 	}
 	result, applied := applyDiff(current, blocks)
 	if applied == 0 {
 		// 所有 SEARCH 都失配: 回退当前模板 (不报错, 保证有可用输出)
 		return &Proposal{Content: current, Patch: patch, Raw: out, Applied: applied, ToolCall: toolCall}, nil
 	}
-	return &Proposal{Content: result, Patch: patch, Raw: out, Applied: applied, ToolCall: toolCall}, nil
+	return validated(&Proposal{Content: result, Patch: patch, Raw: out, Applied: applied, ToolCall: toolCall}), nil
+}
+
+// validated 对 proposal 的模板内容做静态校验 (只解析不连库), 问题附在 Issues 上。
+// 失配回退 (Content=当前模板) 的分支不校验: 内容没变, 报旧模板的问题只会误导。
+func validated(p *Proposal) *Proposal {
+	_, p.Issues = engine.Validate(p.Content)
+	return p
 }
 
 // buildMessages 把历史与本轮组装成 provider 的 messages 列表。

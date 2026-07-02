@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"xproxy/conf"
 	"xproxy/dao"
@@ -12,6 +13,9 @@ import (
 
 // ErrNotTriggered 表示带阈值条件的定时任务本次未命中条件, 不推送 (非失败)。
 var ErrNotTriggered = errors.New("条件未命中, 未推送")
+
+// ErrSilenced 表示条件命中但处于告警静默期, 跳过推送 (非失败)。
+var ErrSilenced = errors.New("命中但在静默期内, 未推送")
 
 // Execute 跑一次定时任务: 取报表 → 执行 → (判定条件) → 渲染 → 推送。
 // 返回 nil 表示已推送; 返回 ErrNotTriggered 表示带条件定时任务未命中 (正常跳过)。
@@ -47,11 +51,15 @@ func Execute(sub *dao.ScheduleRecord) error {
 	}
 
 	// 阈值告警: 配了条件则只有命中才推送; 命中时正文加告警前缀。
+	// 静默期: 命中但距上次告警不足 silence_minutes 则跳过, 防持续命中造成告警风暴。
 	var alarmPrefix string
 	if sub.Condition != nil {
 		hit, detail := evalCondition(sub.Condition, result)
 		if !hit {
 			return fmt.Errorf("%w (%s)", ErrNotTriggered, detail)
+		}
+		if silenced(sub.Condition.SilenceMinutes, sub.LastAlarmAt, nowFunc()) {
+			return fmt.Errorf("%w (%s)", ErrSilenced, detail)
 		}
 		alarmPrefix = "⚠️ 告警: " + detail + "\n"
 	}
@@ -62,7 +70,19 @@ func Execute(sub *dao.ScheduleRecord) error {
 	}
 
 	text := alarmPrefix + RenderText(name, result, viewURL(report, sub))
-	return push(sub.Channel, sub.Webhook, text)
+	if err := push(sub.Channel, sub.Webhook, text); err != nil {
+		return err
+	}
+	// 告警推送成功后记录时间, 作为下次静默期判断的起点。失败不影响本次结果。
+	if sub.Condition != nil && sub.Condition.SilenceMinutes > 0 {
+		_ = dao.TouchScheduleAlarm(sub.Id, nowFunc())
+	}
+	return nil
+}
+
+// silenced 判断是否处于告警静默期: 距上次告警不足 minutes 分钟则跳过。
+func silenced(minutes int, lastAlarmAt *time.Time, now time.Time) bool {
+	return minutes > 0 && lastAlarmAt != nil && now.Sub(*lastAlarmAt) < time.Duration(minutes)*time.Minute
 }
 
 // viewURL 构造报表查看链接 (站点地址未配置则返回空, 消息不带链接):

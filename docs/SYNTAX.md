@@ -909,7 +909,7 @@ else { result.table({ rows: r2.json().data }) }
 
 - 返回对象: `{ status, body, json() }` —— `status` 是 HTTP 状态码, `body` 是原始文本, `json()` 解析为对象。
 - `opts`: `{ method, headers, body }`, 省略则为 GET。单请求超时 30 秒, 响应体上限 4MB。
-- ⚠️ `fetch` 可访问任意地址 (SSRF 面), **仅限内网信任环境** (见文末安全前提)。
+- ⚠️ `fetch` 默认可访问任意地址 (SSRF 面), **仅限内网信任环境** (见文末安全前提)。管理员可通过配置 `engine.script_fetch` 收紧: `off` 禁用, 或逗号分隔的 URL 前缀白名单 (如 `https://api.example.com,https://open.feishu.cn`)。
 
 ### 调试技巧
 

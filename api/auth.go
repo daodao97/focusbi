@@ -85,9 +85,15 @@ func login(c *gin.Context) {
 		fail(c, http.StatusBadRequest, err.Error())
 		return
 	}
+	// 失败退避: 连续失败达阈值后锁定, 时长指数增长 (防暴力破解)。
+	if locked, wait := loginLocked(c.ClientIP(), req.Username); locked {
+		fail(c, http.StatusTooManyRequests, "登录失败次数过多, 请 "+wait.String()+" 后再试")
+		return
+	}
 	u, err := dao.GetUserByName(strings.TrimSpace(req.Username))
 	if err != nil {
 		if err == xdb.ErrNotFound {
+			loginFailed(c.ClientIP(), req.Username)
 			fail(c, http.StatusUnauthorized, "用户名或密码错误")
 			return
 		}
@@ -95,9 +101,11 @@ func login(c *gin.Context) {
 		return
 	}
 	if !auth.CheckPassword(u.Password, req.Password) {
+		loginFailed(c.ClientIP(), req.Username)
 		fail(c, http.StatusUnauthorized, "用户名或密码错误")
 		return
 	}
+	loginSucceeded(c.ClientIP(), req.Username)
 	issueAndReturn(c, u.Id, u.Username, u.IsAdmin)
 }
 

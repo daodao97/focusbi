@@ -49,6 +49,41 @@ func TestPruneExpired(t *testing.T) {
 	}
 }
 
+func TestCacheCapacityLimits(t *testing.T) {
+	resetQueryCacheForTest()
+	setupSQLiteDefault(t)
+
+	// 条目数上限: 满员后新键不入缓存, 已有键仍可更新。
+	origEntries, origRows := maxCacheEntries, maxCacheRows
+	maxCacheEntries, maxCacheRows = 1, 1
+	defer func() { maxCacheEntries, maxCacheRows = origEntries, origRows }()
+
+	if _, err := cachedQuery("default", `SELECT day FROM pv WHERE day = '2026-06-24'`, 60, false); err != nil {
+		t.Fatalf("query1: %v", err)
+	}
+	if _, err := cachedQuery("default", `SELECT day FROM pv WHERE day = '2026-06-23'`, 60, false); err != nil {
+		t.Fatalf("query2: %v", err)
+	}
+	queryCacheMu.Lock()
+	n := len(queryCache)
+	queryCacheMu.Unlock()
+	if n != 1 {
+		t.Errorf("缓存条目 = %d, 满员后应保持 1", n)
+	}
+
+	// 行数上限: 结果行数超限不缓存。
+	resetQueryCacheForTest()
+	if _, err := cachedQuery("default", `SELECT day FROM pv`, 60, false); err != nil {
+		t.Fatalf("query big: %v", err)
+	}
+	queryCacheMu.Lock()
+	n = len(queryCache)
+	queryCacheMu.Unlock()
+	if n != 0 {
+		t.Errorf("超行数上限的结果不应入缓存, 实际条目 = %d", n)
+	}
+}
+
 func TestRunSQLCacheUsesCachedResult(t *testing.T) {
 	resetQueryCacheForTest()
 	setupSQLiteDefault(t)

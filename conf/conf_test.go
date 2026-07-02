@@ -42,6 +42,39 @@ func TestQueryTimeoutDuration(t *testing.T) {
 	}
 }
 
+func TestScriptFetchAllowed(t *testing.T) {
+	mk := func(mode string) *Conf { return &Conf{Engine: EngineConf{ScriptFetch: mode}} }
+
+	// 默认 / on: 放行
+	for _, mode := range []string{"", "on", "ON", " on "} {
+		if mk(mode).ScriptFetchAllowed("http://169.254.169.254/meta") != nil {
+			t.Errorf("mode=%q 应放行", mode)
+		}
+	}
+	// nil conf 放行 (单测等无配置场景)
+	if (*Conf)(nil).ScriptFetchAllowed("http://x") != nil {
+		t.Error("nil conf 应放行")
+	}
+	// off: 全拒
+	if mk("off").ScriptFetchAllowed("https://api.example.com/x") == nil {
+		t.Error("off 应拒绝所有外呼")
+	}
+	// 白名单: 前缀命中放行, 未命中拒绝
+	wl := mk("https://api.example.com, https://open.feishu.cn")
+	if wl.ScriptFetchAllowed("https://api.example.com/v1/rate") != nil {
+		t.Error("白名单前缀命中应放行")
+	}
+	if wl.ScriptFetchAllowed("https://open.feishu.cn/hook") != nil {
+		t.Error("白名单第二项应放行")
+	}
+	if wl.ScriptFetchAllowed("http://169.254.169.254/meta") == nil {
+		t.Error("白名单未命中应拒绝")
+	}
+	if wl.ScriptFetchAllowed("https://api.example.com.evil.com/x") == nil {
+		t.Error("前缀伪装域名应拒绝")
+	}
+}
+
 func TestEnvOverridesNestedConfig(t *testing.T) {
 	t.Setenv("SITE_URL", "https://bi.example.com")
 	t.Setenv("SITE_JWT_SECRET", "env-secret")
