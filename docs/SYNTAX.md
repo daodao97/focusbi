@@ -723,6 +723,7 @@ result.table({
 | `result.markdown(text)` | 产出 markdown 区块 |
 | `result.chart(cfg, rows?)` | 产出图表区块; `cfg` 可带 `id/title/subtitle/notice/columns/formats/sum/avg/invisible/hidden/rows` (见下) |
 | `result.filter({name,label,type,options,default,multiple})` | 动态产出**过滤器** (下拉选项可由脚本任意计算; `multiple:true` 为多选, 见下) |
+| `cache.get(key)` / `cache.set(key, value, ttlSec)` | 自定义 KV 缓存脚本计算结果 (进程内); `get` 未命中返回 `undefined` (见下) |
 | `now()` | 当前时间 (RFC3339 字符串) |
 | `formatDate(value, fmt)` | 日期格式化 (PHP 风格, 见 §6) |
 | `fetch(url, opts?)` | HTTP 外呼, 返回 `{status, body, json()}` |
@@ -782,6 +783,28 @@ const rows2 = query(
 选项支持 `{dsn, sql_cache}`; `sql_cache` 也可写成 `cache` 或 `ttl`。公开分享和定时任务运行时
 会按发布/开启分享/保存任务时批准的 `approved_dsns` 再校验实际 `dsn`; 若用 `params.dsn`
 这类动态数据源, 运行时只能选择已批准列表中的数据源。
+
+### 自定义缓存 `cache.get/set`
+
+`query()` 缓存只覆盖 SQL 结果。若要缓存**脚本自己计算的中间结果** (聚合、fetch 外部接口的响应等),
+用 `cache`:
+
+```
+#!SCRIPT
+let stats = cache.get('sales:stats:' + params.day)
+if (stats === undefined) {
+  const rows = query('SELECT channel, SUM(amount) amt FROM sales WHERE day = ? GROUP BY channel', [params.day])
+  stats = { total: rows.reduce((s, r) => s + r.amt, 0), rows }
+  cache.set('sales:stats:' + params.day, stats, 300)   // 缓存 300 秒
+}
+result.table({ title: '合计 ' + stats.total, rows: stats.rows })
+#!END
+```
+
+- 值须可 JSON 序列化 (对象/数组/标量); 函数等不可序列化的值静默不缓存。
+- **键是全局命名空间** (跨报表共享), 建议自带前缀 (如 `'sales:'`) 避免撞键。
+- 进程内缓存, 重启即失; 查看者强制刷新 (`nocache`) 时 `get` 强制未命中, `set` 照常写入新值。
+- 上限: 500 个键 / 单值序列化后 1MB, 超限静默不缓存。
 
 ### 11.1 前置脚本 `@setup` — 派生参数
 

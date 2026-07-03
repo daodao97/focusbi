@@ -79,6 +79,63 @@ func cachedQuery(dsn, sql string, ttlSec int, bypass bool, args ...any) (*dataso
 	return res, nil
 }
 
+// 脚本自定义缓存 (脚本 API cache.get/set): 进程内 KV, 值 JSON 序列化存储 (天然深拷贝,
+// 防止多次运行共享可变对象)。键为脚本自定义字符串, **全局命名空间** (跨报表共享, 也可能冲突,
+// 建议脚本自带前缀如 'sales:xxx')。
+// ponytail: 与 queryCache 同样的硬上限策略, 不够再统一抽象。
+var (
+	maxScriptCacheEntries = 500     // 条目数上限
+	maxScriptCacheBytes   = 1 << 20 // 单值序列化后 1MB 上限
+)
+
+type scriptCacheEntry struct {
+	data    []byte // JSON
+	expires time.Time
+}
+
+var (
+	scriptCacheMu sync.Mutex
+	scriptCache   = map[string]scriptCacheEntry{}
+)
+
+// scriptCacheGet 返回反序列化后的值; 未命中/已过期返回 (nil, false)。
+func scriptCacheGet(key string) (any, bool) {
+	now := nowFunc()
+	scriptCacheMu.Lock()
+	e, ok := scriptCache[key]
+	scriptCacheMu.Unlock()
+	if !ok || now.After(e.expires) {
+		return nil, false
+	}
+	var v any
+	if err := json.Unmarshal(e.data, &v); err != nil {
+		return nil, false
+	}
+	return v, true
+}
+
+// scriptCacheSet 序列化后写入; ttl<=0、序列化失败或超限时静默不缓存 (缓存本就是尽力而为)。
+func scriptCacheSet(key string, val any, ttlSec int) {
+	if key == "" || ttlSec <= 0 {
+		return
+	}
+	data, err := json.Marshal(val)
+	if err != nil || len(data) > maxScriptCacheBytes {
+		return
+	}
+	now := nowFunc()
+	scriptCacheMu.Lock()
+	for k, e := range scriptCache {
+		if now.After(e.expires) {
+			delete(scriptCache, k)
+		}
+	}
+	if _, exists := scriptCache[key]; exists || len(scriptCache) < maxScriptCacheEntries {
+		scriptCache[key] = scriptCacheEntry{data: data, expires: now.Add(time.Duration(ttlSec) * time.Second)}
+	}
+	scriptCacheMu.Unlock()
+}
+
 func cloneQueryResult(res *datasource.QueryResult) *datasource.QueryResult {
 	if res == nil {
 		return nil

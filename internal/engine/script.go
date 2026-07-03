@@ -142,6 +142,24 @@ func injectScriptAPI(vm *goja.Runtime, ctx scriptContext, acc *scriptResult) {
 		return vm.ToValue(qr.Rows)
 	})
 
+	// cache.get(key) / cache.set(key, value, ttlSec): 脚本自定义 KV 缓存 (进程内, 全局命名空间)。
+	// 值须可 JSON 序列化; get 未命中返回 undefined。nocache 刷新时 get 强制未命中, set 照常写入新值。
+	cacheObj := vm.NewObject()
+	_ = cacheObj.Set("get", func(call goja.FunctionCall) goja.Value {
+		if ctx.noCache {
+			return goja.Undefined()
+		}
+		if v, ok := scriptCacheGet(call.Argument(0).String()); ok {
+			return vm.ToValue(v)
+		}
+		return goja.Undefined()
+	})
+	_ = cacheObj.Set("set", func(call goja.FunctionCall) goja.Value {
+		scriptCacheSet(call.Argument(0).String(), call.Argument(1).Export(), cast.ToInt(call.Argument(2).Export()))
+		return goja.Undefined()
+	})
+	_ = vm.Set("cache", cacheObj)
+
 	// result.table / result.markdown / result.chart
 	result := vm.NewObject()
 	_ = result.Set("table", func(call goja.FunctionCall) goja.Value {

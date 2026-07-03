@@ -176,6 +176,61 @@ result.table({id:'script_cached', rows})
 	}
 }
 
+func TestScriptCacheSetGet(t *testing.T) {
+	scriptCacheMu.Lock()
+	scriptCache = map[string]scriptCacheEntry{}
+	scriptCacheMu.Unlock()
+
+	code := `
+if (cache.get('k') === undefined) {
+  cache.set('k', {n: 42, list: [1, 2]}, 60)
+}
+const v = cache.get('k')
+result.table({rows: [{n: v.n, len: v.list.length}]})
+`
+	blocks, _, _ := runScript(code, scriptContext{})
+	if len(blocks) != 1 || blocks[0].Error != "" {
+		t.Fatalf("blocks = %+v", blocks)
+	}
+	n, _ := toFloat(blocks[0].Rows[0]["n"])
+	if n != 42 {
+		t.Errorf("n = %v, want 42", blocks[0].Rows[0]["n"])
+	}
+
+	// 第二次运行命中缓存 (值不同也应返回旧值)
+	code2 := `
+const v = cache.get('k')
+result.table({rows: [{hit: v !== undefined && v.n === 42}]})
+`
+	blocks, _, _ = runScript(code2, scriptContext{})
+	if hit, _ := blocks[0].Rows[0]["hit"].(bool); !hit {
+		t.Errorf("第二次运行应命中缓存, rows = %v", blocks[0].Rows)
+	}
+
+	// noCache 时 get 强制未命中
+	blocks, _, _ = runScript(code2, scriptContext{noCache: true})
+	if hit, _ := blocks[0].Rows[0]["hit"].(bool); hit {
+		t.Error("noCache 时 cache.get 应未命中")
+	}
+
+	// ttl<=0 不缓存; 不可序列化的值不缓存且不报错
+	code3 := `
+cache.set('zero', 1, 0)
+cache.set('fn', function(){}, 60)
+result.table({rows: [{a: cache.get('zero') === undefined, b: cache.get('fn') === undefined}]})
+`
+	blocks, _, _ = runScript(code3, scriptContext{})
+	if blocks[0].Error != "" {
+		t.Fatalf("err = %s", blocks[0].Error)
+	}
+	if a, _ := blocks[0].Rows[0]["a"].(bool); !a {
+		t.Error("ttl=0 不应缓存")
+	}
+	if b, _ := blocks[0].Rows[0]["b"].(bool); !b {
+		t.Error("函数值不应缓存")
+	}
+}
+
 func TestRunScriptQueryCacheBypass(t *testing.T) {
 	resetQueryCacheForTest()
 	setupSQLiteDefault(t)
