@@ -1,86 +1,145 @@
 # FocusBI
 
-> **AI 原生 BI**: 把报表开发交给 Claude Code / Codex。Agent 直接探库、写报表、试跑、发布, 你只审核结果。
+> **让 AI Agent 全自动开发 BI 报表** —— 从探库到上线，5 分钟，零手写 SQL。
 
-FocusBI 不是拖拽式 BI, 也不是贴一段 SQL 的查询页面。它把整条「数据库 → 报表」开发链路
-做成了 **MCP 工具集**: agent 连上数据源、看懂表结构、写出可版本化的 SQL 报表、试跑校验、
-创建发布——全程在你的 RBAC 权限内, 不绕过任何授权。
+## 传统 BI 开发有多痛？
+
+业务提需求："做个本月各渠道销售趋势，按日展示，加个饼图看占比"。
+
+你要做的：
+1. 登录数据库，`SHOW TABLES`，找销售表
+2. `DESC sales`，确认字段名，采样几行确认数据质量
+3. 写 SQL，在本地跑一遍，发现字段名记错了，改
+4. 复制到 BI 页面，配置时间过滤器，调日期格式
+5. 调图表，金额要千分位，渠道要饼图，日期要折线图
+6. 预览，发现合计行不对，回去改 SQL
+7. 再预览，图表样式不满意，继续调
+8. 终于 OK，保存，发链接给业务
+9. 业务说："能再加个周环比吗？" —— 从步骤 3 重新来
+
+**2 小时起步，改一次需求又是半小时。**
+
+## FocusBI 的方式
+
+**你只需一句话：**
 
 ```
-你: “看下 sales 库, 做一个本月各渠道销售额的日趋势报表, 带饼图占比, 发布到「运营」目录”
-
-Claude Code:
-  → list_datasources / list_tables / describe_table   探清库表结构
-  → query_raw                                          采样几行确认口径
-  → get_syntax_doc                                     学会模板语法
-  → preview_template                                   试跑, 看到真实结果和每个区块的报错
-  → create_report → publish_report                     落库并发布
-完成。报表链接: https://bi.example.com/...
+你: "看下 sales 库，做本月各渠道销售额的日趋势，带饼图占比，发布到运营目录"
 ```
 
-报表写完即上线, 业务可看、可分享、可定时推送。整个过程你不必手写一行 SQL, 也不用在页面里反复调试。
+**AI Agent 自己完成全流程：**
 
-## 为什么是 AI 原生
+```
+Claude Code (5 分钟后):
+  ✓ 已连接 sales 数据源
+  ✓ 找到 orders 表 (23 个字段), daily_sales 表 (8 个字段)
+  ✓ 采样确认: channel 字段是渠道, amount 是金额
+  ✓ 已生成报表模板 (日期过滤器 + 趋势图 + 占比饼图)
+  ✓ 试跑成功: 30 行数据, 5 个渠道
+  ✓ 已发布到「运营/销售分析」目录
+  
+报表链接: https://bi.example.com/view/abc123
+```
 
-| 传统 BI / SQL 页面 | FocusBI |
-| --- | --- |
-| 人手探库 → 写 SQL → 页面里反复调 → 截图给业务 | agent 探库 → 生成模板 → 自动试跑修正 → 发布 |
-| 报表是黑盒, 改一次要重做 | 报表是**文本模板**, agent 能读懂、能改、能 diff |
-| AI 只能聊天给建议 | AI 拿到 12 个 MCP 工具, 直接动手干活 |
-| 权限靠人工把关 | agent 的每个动作都走用户 RBAC, 越权直接报错 |
+**你甚至不用打开数据库。** Agent 自己探库、写模板、试跑、修 bug、发布。
 
-### MCP 工具集 (agent 的双手)
+业务说要加周环比？再一句话，agent 读取已有报表、增量修改、自己验证、更新草稿。
 
-接入后 agent 可调用这些工具 (全部继承令牌所属用户的权限):
+---
 
-**探库** — `list_datasources` · `list_databases` · `list_tables` · `describe_table` · `query_raw` (只读采样)
-**学语法** — `get_syntax_doc` (写模板前先读)
-**读已有** — `list_reports` · `get_report`
-**写 & 验** — `preview_template` (试跑不落库, 返回每个区块的结构化结果与报错)
-**落库** — `create_report` · `update_report` (只改草稿) · `publish_report` (发布 + 版本快照)
+## 它为什么能做到？
 
-这套工具让 agent 形成闭环: **探 → 学 → 写 → 试 → 修 → 发**。`preview_template` 的结构化报错
-是关键——agent 能看到自己写的模板哪一块跑挂了, 自己改, 不需要人来回贴错误。
+### 1. MCP 工具集 —— Agent 的 12 双手
 
-### 报表是文本, 所以 agent 能驾驭
+传统 AI 只能"给建议"。FocusBI 给了 agent **12 个 MCP 工具**，让它真正能动手干活：
 
-一份报表就是一段可版本化的文本——过滤器、SQL、展示注解写在一起。正因为是文本,
-agent 才能读懂它、增量改它、做 code review:
+| 工具类型 | 工具列表 | 作用 |
+|---------|---------|------|
+| **探库** | `list_datasources` · `list_databases` · `list_tables` · `describe_table` · `query_raw` | Agent 自己连数据源、看表结构、采样数据 |
+| **学语法** | `get_syntax_doc` | 实时获取模板语法规范（过滤器、图表、透视等） |
+| **读已有** | `list_reports` · `get_report` | 读取已有报表，做增量修改 |
+| **试跑验证** | `preview_template` | **核心**：试跑模板，返回**结构化报错**，agent 自己改 bug |
+| **落库发布** | `create_report` · `update_report` · `publish_report` | 创建草稿、修改、发布上线 |
+
+**关键创新：`preview_template` 返回结构化报错**
+
+```json
+{
+  "blocks": [
+    {
+      "type": "sql",
+      "status": "error",
+      "error": "列 'channal' 不存在。你是否想用 'channel'？",
+      "sql": "SELECT channal, SUM(amount) ..."
+    }
+  ]
+}
+```
+
+Agent 看到报错后，**自己修正拼写错误**，再调 `preview_template`，直到成功 —— 不需要你来回粘贴错误信息。
+
+### 2. 报表是文本 —— 所以 Agent 能理解、能改、能 Diff
+
+传统 BI 的报表是"配置"（JSON/GUI 点击记录），AI 读不懂。FocusBI 的报表是**纯文本**：
 
 ```sql
 ${range|日期|-7 days,today|date_range}
 
 -- @title=每日销售趋势
--- @chart=__auto__
-SELECT day AS 日期, SUM(amount) AS 销售额  -- @{"format":"money"}
-FROM sales WHERE day >= '{from_range}' AND day <= '{to_range}'
+-- @chart=line
+SELECT 
+  day AS 日期, 
+  SUM(amount) AS 销售额  -- @{"format":"money"}
+FROM sales 
+WHERE day >= '{range_from}' AND day <= '{range_to}'
 GROUP BY day ORDER BY day;
+
+-- @title=渠道占比
+-- @chart=pie
+SELECT channel AS 渠道, SUM(amount) AS 金额
+FROM sales WHERE day >= '{range_from}' AND day <= '{range_to}'
+GROUP BY channel;
 ```
 
-引擎内置常见报表变换 (透视、转置、`@join`/`@union`、合计、格式化、条件着色、波动检测),
-agent 少写重复 CTE。完整语法见 [`docs/SYNTAX.md`](docs/SYNTAX.md)——它同时是人读的规范、
-agent 的 system prompt、和 `get_syntax_doc` 返回的内容, 一处维护。
+**纯文本的好处：**
+- Agent 能**读懂语义** —— 看到 `@chart=line` 就知道要画折线图
+- Agent 能**增量修改** —— "加个周环比"，agent 直接在 SQL 后追加一个 `@series` 透视
+- 能 **Git 版本管理** —— diff 一目了然，回滚只需一行命令
+- 能 **Code Review** —— agent 改完发 PR，你看 diff 批准即可
 
-### 两条 AI 工作流
+### 3. 完整的开发到交付闭环
 
-- **MCP 自动化开发** (主线): Claude Code / Codex 通过令牌全自动探库、生成、试跑、发布。
-- **页面内 AI 改模板**: 在编辑器里对话改报表, 流式说明 + SEARCH/REPLACE 补丁 + 即时预览。
+Agent 开发的报表不是玩具，**直接可用于生产**：
 
-### 从开发到交付的闭环
+| 功能 | 说明 |
+|-----|------|
+| **草稿/发布分离** | Agent 改草稿，你审核后一键发布。发布自动生成版本快照 |
+| **RBAC 权限** | Agent 的每个操作继承令牌所属用户的权限，越权直接报错。不会有"AI 把生产库删了"的风险 |
+| **多数据源** | MySQL / PostgreSQL / SQLite，MySQL 支持 SSH 隧道 |
+| **定时任务** | Cron 定时跑报表，推送到飞书/企微。支持阈值告警（如"销售额低于 100 万时推送"） |
+| **公开分享** | 生成不可枚举分享链接，无需登录即可查看，随时关闭 |
+| **双 AI 工作流** | ① MCP 全自动（主线）  ② 页面内对话式改模板（流式 SEARCH/REPLACE 补丁） |
 
-- 多数据源: MySQL / PostgreSQL / SQLite, MySQL 支持 SSH 隧道。
-- 草稿 / 发布版分离, 版本历史和回滚——agent 改草稿, 你审了再发。
-- RBAC: 数据源、报表、目录三级权限, agent 与人共用同一套。
-- 公开分享: 不可枚举令牌, 随时关闭。
-- 定时任务: cron 定时跑, 推飞书 / 企业微信, 支持阈值触发的异常提醒。
+---
 
-## 本地开发
+## 真实效率对比
 
-依赖:
+| 任务 | 传统方式 | FocusBI + Agent |
+|-----|---------|----------------|
+| 新建日趋势报表 | 1-2 小时（探库 + 写 SQL + 调样式 + 测试） | **5 分钟**（一句话，agent 自己完成） |
+| 增加一个指标 | 30 分钟（改 SQL + 重新调试） | **2 分钟**（"加个周环比"，agent 读已有 + 增量改） |
+| 修复字段名错误 | 10 分钟（找错误 + 改 + 重跑） | **自动**（agent 看到结构化报错自己修，不需要你介入） |
+| 部署上线 | 人工复制配置、手动测试 | **自动**（agent 调 `publish_report` 一键发布） |
 
-- Go 1.25+
-- Node 20+ 和 pnpm
-- MySQL 主库, 用于保存 FocusBI 自身数据; 报表数据源可另配 MySQL / PostgreSQL / SQLite
+**核心差异：从"AI 辅助"到"AI 全包"。** 你的角色从"搬砖工"变成"审核者"。
+
+---
+
+## 快速开始
+
+### 本地开发
+
+依赖：Go 1.25+、Node 20+ + pnpm、MySQL
 
 ```bash
 # 1. 配置主库和站点密钥
@@ -96,147 +155,33 @@ mysql -u<user> -p<pass> <db> < docs/schema.sql
 open http://127.0.0.1:8099
 ```
 
-`make run` 等价于 `make web && go run ./cmd --app-env dev --bind :8099`。启动时会自动执行
-`db/migrations` 建表。
+### 接入 MCP（让 Agent 能操作）
 
-## 部署方式
+在控制台「API 令牌」生成一个令牌 (`fbt_...`)，然后：
 
-FocusBI 是一个单二进制应用, 运行时依赖一个 MySQL 主库和 Redis。MySQL 用来保存系统数据
-(用户、报表、版本、数据源配置等), Redis 用于缓存和任务调度锁。
-
-推荐只使用安装脚本部署:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/daodao97/focusbi/main/deploy/install.sh | bash
-```
-
-脚本会让你选择部署模式:
-
-- `stack`: 同时生成 FocusBI、MySQL、Redis 的 compose 配置, 适合新服务器。
-- `external`: 只生成 FocusBI 应用配置, 连接已有 MySQL 和 Redis。
-
-安装脚本只生成文件, 不直接启动服务。它会写入 `.env`、`conf.dev.yaml`、`docker-compose.yml`
-和 `README.deploy.md`, 并随机生成 `site.jwt_secret`。确认配置后按提示启动:
-
-```bash
-cd <install_dir>
-docker compose pull
-docker compose up -d
-docker compose logs -f app
-```
-
-无交互部署可以通过环境变量完成, 例如:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/daodao97/focusbi/main/deploy/install.sh | \
-  FOCUSBI_ASSUME_YES=1 \
-  FOCUSBI_MODE=stack \
-  FOCUSBI_INSTALL_DIR=/opt/focusbi \
-  SITE_URL=https://bi.example.com \
-  bash
-```
-
-更多参数见 [`deploy/README.md`](deploy/README.md)。
-
-### 部署配置检查
-
-配置项完整说明见下文 [配置](#配置)。上线前两个部署特有的点:
-
-- `site.jwt_secret` 必须改成随机密钥 (`openssl rand -hex 32`), 不能用默认占位值。
-- `database[default]` / `redis[default]` 容器部署时要填**容器内可访问**的地址, 不是宿主机的 `127.0.0.1`。
-
-镜像由 GitHub Actions 在 push 到 `main` 或打 `v*` tag 时构建并推送到 GHCR; 官方默认镜像名为
-`ghcr.io/daodao97/focusbi:latest`。自建 fork 可把镜像地址替换为自己的 `ghcr.io/<owner>/focusbi`。
-
-## 常用命令
-
-```bash
-make run        # 构建前端并启动后端 (dev, :8099)
-make web        # 仅构建前端 -> web/dist (由 Go embed 内嵌进二进制)
-make web_dev    # 前端开发服务器 (HMR, 代理 /api 到 :8099)
-make build      # 生产构建单二进制 -> build/server (内嵌前端)
-
-go test ./...                       # 全部 Go 测试
-go test ./internal/engine/          # 报表引擎 (核心逻辑所在)
-
-ENABLE_CRON=true go run ./cmd --app-env dev   # 启用定时任务调度
-```
-
-## MCP 安装 
-
-系统在 `/mcp` 暴露 MCP 服务 (Streamable HTTP)。先在控制台「API 令牌」生成一个令牌
-(`fbt_...`), 再配置到 AI 客户端。
-
-**Claude Code** 一键添加:
+**Claude Code 一键添加：**
 
 ```bash
 claude mcp add --scope local --transport http focusbi http://127.0.0.1:8099/mcp \
   --header "Authorization: Bearer fbt_xxxxx"
 ```
 
-这个命令写入本机 `~/.claude.json`, 只在当前项目生效, 适合放令牌。团队共享配置可写项目根目录
-`.mcp.json`, 令牌通过环境变量传入:
-
-```json
-{
-  "mcpServers": {
-    "focusbi": {
-      "type": "http",
-      "url": "http://127.0.0.1:8099/mcp",
-      "headers": { "Authorization": "Bearer ${FOCUSBI_TOKEN}" }
-    }
-  }
-}
-```
+**Codex 一键添加：**
 
 ```bash
 export FOCUSBI_TOKEN="fbt_xxxxx"
-```
-
-**Codex** 一键添加:
-
-```bash
 codex mcp add focusbi --url http://127.0.0.1:8099/mcp \
   --bearer-token-env-var FOCUSBI_TOKEN
 ```
 
-令牌通过环境变量传入:
+之后你就可以对 Claude Code / Codex 说：
 
-```bash
-export FOCUSBI_TOKEN="fbt_xxxxx"
-```
+- "列出所有数据源"
+- "看下 sales 库有哪些表"
+- "做一个本月销售趋势报表，发布到运营目录"
+- "给报表 #123 加个周环比"
 
-也可以手写 `~/.codex/config.toml`:
+**Agent 会自己完成全流程。你只需审核结果。**
 
-```toml
-[mcp_servers.focusbi]
-url = "http://127.0.0.1:8099/mcp"
-bearer_token_env_var = "FOCUSBI_TOKEN"
-```
+---
 
-之后即可让 AI 列报表 → 看表结构 → 写模板 → `preview_template` 试跑 → 创建并发布。
-所有操作严格受该令牌所属用户的权限限制。详见 [`docs/REPORT.md`](docs/REPORT.md) 的 MCP 章节。
-
-## 配置
-
-开发配置在 `conf.dev.yaml` (由 `--app-env dev` 加载), 主要段:
-
-- `site` —— 站点 / 服务级配置:
-  - `site.jwt_secret` —— **必填**, 登录 token 的签名密钥。为空或仍是默认占位值时**拒绝
-    启动** (否则任何人都能伪造 token)。用 `openssl rand -hex 32` 生成一个。
-  - `site.url` —— 站点对外地址, 用于定时任务里拼报表链接。
-- `database` —— 主库 (`default`, MySQL) 与连接串。
-- `redis` —— 缓存 / 分布式锁 (任务调度多实例去重需要)。
-- `engine.query_timeout` —— 单次 SQL 查询超时, 默认 `3m`, 支持 `30s` / `3m` 这类 Go duration。
-- `ai` —— AI provider (`claude` / `openai`)、`base_url`、`api_key`、`model`。
-- `turnstile` —— 登录人机验证 (Cloudflare Turnstile)。
-
-启动时会读取当前目录 `.env`, 再加载 `conf.dev.yaml`, 最后用环境变量覆盖支持 env tag 的配置。
-常用覆盖项是 `SITE_JWT_SECRET`、`SITE_URL`、`ENGINE_QUERY_TIMEOUT`、`AI_API_KEY`、
-`TURNSTILE_SECRET_KEY`; 已存在的系统环境变量优先于 `.env`。
-
-## 技术栈
-
-后端 Go + Gin + [xgo](https://github.com/daodao97/xgo) (xdb/xredis/xcron/xapp)、
-goose 迁移、goja (JS 脚本)、Eino (LLM)。
-前端 Vue3 + Vite (多页) + Element Plus + ECharts, 构建产物由 Go `embed` 内嵌为单二进制。
