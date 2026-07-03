@@ -185,3 +185,216 @@ codex mcp add focusbi --url http://127.0.0.1:8099/mcp \
 
 ---
 
+
+## 技术亮点
+
+### 为什么 Agent 能自主修复 Bug？
+
+传统 AI 聊天：
+
+```
+你: "这个 SQL 报错了：Column 'channal' not found"
+AI: "看起来是拼写错误，应该改成 'channel'"
+你: [复制建议，手动改代码，重新跑]
+```
+
+FocusBI 的 `preview_template`：
+
+```python
+# Agent 内部流程
+response = preview_template(content)
+if response.blocks[0].error:
+    # 结构化报错，agent 直接解析
+    error = "列 'channal' 不存在。建议: 'channel'"
+    # agent 自己生成修复补丁
+    fixed_content = content.replace("channal", "channel")
+    # 再次试跑
+    response = preview_template(fixed_content)
+    # 成功！
+```
+
+**关键：结构化报错 + 可重入的试跑接口 = Agent 自我修正闭环。**
+
+### 为什么报表是文本而不是 JSON？
+
+| JSON 配置 | FocusBI 文本模板 |
+|----------|----------------|
+| `{"chart": {"type": "line", "xAxis": "day"}}` | `-- @chart=line` (agent 一眼能读) |
+| 改一个字段要找到嵌套的 JSON 路径 | 直接 `replace("旧列名", "新列名")` |
+| Git diff 是 JSON 结构变化，不知道改了啥 | Git diff 直接看到 SQL 和注解变化 |
+| Agent 要理解 JSON schema | Agent 用自然语言理解 `@title`、`@chart` |
+
+**文本模板 = Agent 友好 + 人类可读 + Git 友好。**
+
+---
+
+## 架构说明
+
+```
+┌─────────────┐
+│ Claude Code │  通过 MCP 调用 12 个工具
+│   / Codex   │  继承用户令牌的 RBAC 权限
+└──────┬──────┘
+       │ HTTP /mcp (Streamable HTTP)
+       ↓
+┌─────────────────────────────────────────┐
+│          FocusBI (Go + Vue3)            │
+├─────────────────────────────────────────┤
+│ MCP Server (internal/mcpserver/)        │
+│  → 权限校验 (auth.Permission)            │
+│  → 工具路由 (探库/预览/发布...)           │
+├─────────────────────────────────────────┤
+│ 报表引擎 (internal/engine/)             │
+│  → 解析模板 (过滤器 + 宏 + SQL + 注解)    │
+│  → 数据管道 (@filter → @sort → @series) │
+│  → 返回结构化结果 (含每个 block 的报错)   │
+├─────────────────────────────────────────┤
+│ 数据源层 (internal/datasource/)         │
+│  → 连接池 (MySQL/PG/SQLite)             │
+│  → SSH 隧道 (MySQL)                     │
+│  → 查询缓存 (@sql_cache)                │
+└─────────────────────────────────────────┘
+       │
+       ↓
+   MySQL (主库: 用户/报表/版本)
+   Redis (缓存 + 分布式锁)
+   报表数据源 (MySQL/PG/SQLite)
+```
+
+完整架构见 [`docs/REPORT.md`](docs/REPORT.md)，模板语法见 [`docs/SYNTAX.md`](docs/SYNTAX.md)。
+
+---
+
+
+## 部署
+
+### 一键安装
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/daodao97/focusbi/main/deploy/install.sh | bash
+```
+
+安装脚本会询问部署模式：
+- **stack**: 生成 FocusBI + MySQL + Redis 完整配置（适合新服务器）
+- **external**: 只生成 FocusBI 应用配置，连接已有数据库
+
+脚本只生成配置文件（`.env`、`conf.prod.yaml`、`docker-compose.yml`），不会自动启动服务。确认配置后：
+
+```bash
+cd <install_dir>
+docker compose pull
+docker compose up -d
+docker compose logs -f app
+```
+
+### 无交互部署
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/daodao97/focusbi/main/deploy/install.sh | \
+  FOCUSBI_ASSUME_YES=1 \
+  FOCUSBI_MODE=stack \
+  FOCUSBI_INSTALL_DIR=/opt/focusbi \
+  SITE_URL=https://bi.example.com \
+  bash
+```
+
+更多参数见 [`deploy/README.md`](deploy/README.md)。
+
+### 配置检查清单
+
+上线前必查：
+
+- ✅ `site.jwt_secret` 必须用 `openssl rand -hex 32` 生成，不能是默认占位值
+- ✅ `database[default]` / `redis[default]` 地址在容器内可访问（不是 `127.0.0.1`）
+- ✅ `site.url` 设为对外访问地址（定时推送用）
+- ✅ 如需 AI 改模板功能，配置 `ai.api_key`
+
+完整配置说明：
+
+| 配置项 | 说明 |
+|-------|------|
+| `site.jwt_secret` | **必填**，登录 token 签名密钥。为空或默认值时拒绝启动 |
+| `site.url` | 站点对外地址，用于定时任务里拼报表链接 |
+| `database` | 主库 (必须是 MySQL)，保存用户/报表/版本数据 |
+| `redis` | 缓存和分布式锁（多实例部署必需） |
+| `engine.query_timeout` | 单次 SQL 查询超时，默认 `3m` |
+| `ai` | AI provider (`claude`/`openai`) + `api_key` + `model` |
+| `turnstile` | Cloudflare Turnstile 登录人机验证 |
+
+启动时会读取当前目录 `.env`，再加载配置文件，最后用环境变量覆盖。
+
+---
+
+## 常用命令
+
+```bash
+make run        # 构建前端 + 启动后端 (dev, :8099)
+make web        # 仅构建前端 → web/dist (Go embed)
+make web_dev    # 前端 HMR 开发服务器 (代理 /api 到 :8099)
+make build      # 生产构建单二进制 → build/server
+
+go test ./...                       # 全部 Go 测试
+go test ./internal/engine/          # 报表引擎测试
+
+ENABLE_CRON=true go run ./cmd --app-env dev   # 启用定时任务调度
+```
+
+---
+
+## 技术栈
+
+**后端**: Go 1.25+ + Gin + [xgo](https://github.com/daodao97/xgo) (xdb/xredis/xcron/xapp) + goose (迁移) + goja (JS) + Eino (LLM)
+
+**前端**: Vue3 + Vite (MPA) + Element Plus + ECharts + Monaco Editor
+
+**构建**: 前端 `web/dist` 由 Go `embed` 内嵌为单二进制
+
+**数据库**: MySQL (主库，必需) + PostgreSQL/SQLite (报表数据源可选)
+
+**缓存/锁**: Redis (多实例部署必需，单实例可选)
+
+---
+
+## 文档
+
+- **[模板语法规范](docs/SYNTAX.md)** —— 过滤器、宏、注解、图表、透视等完整语法（同时是 AI system prompt）
+- **[架构与运维](docs/REPORT.md)** —— 报表引擎、MCP 工具、部署、RBAC 详解
+- **[MCP 接入指南](docs/MCP.md)** —— Claude Code / Codex 配置步骤
+
+---
+
+## License
+
+MIT
+
+---
+
+## FAQ
+
+**Q: Agent 会不会误删生产数据？**
+
+A: 不会。每个 MCP 工具调用都继承令牌所属用户的 RBAC 权限。如果用户没有删除权限，agent 也删不了。`query_raw` 工具只读，不允许 `DELETE`/`UPDATE`。
+
+**Q: 报表模板存哪？能版本管理吗？**
+
+A: 存在 MySQL 的 `report` 表，`content` 字段是纯文本。每次发布自动生成版本快照（`report_version` 表），可回滚。建议定期导出模板到 Git 仓库做离线备份。
+
+**Q: 支持哪些图表？**
+
+A: ECharts 5.x 的折线图、柱状图、饼图、散点图、热力图、雷达图等。设置 `@chart=__auto__` 会根据数据类型自动选图表。
+
+**Q: 能对接我们自己的 SSO？**
+
+A: 当前只支持用户名密码登录 + Turnstile 人机验证。需要对接 SSO 可以改 `api/auth.go` 的登录逻辑，签发标准 JWT 即可。
+
+**Q: MCP 工具能跨网络调用吗（agent 在本地，FocusBI 在服务器）？**
+
+A: 可以。只要 agent 能访问 FocusBI 的 `/mcp` 端点（HTTP/HTTPS），配置时填服务器 URL + Bearer token 即可。建议生产环境启用 HTTPS。
+
+**Q: 定时任务支持哪些推送渠道？**
+
+A: 当前支持飞书 webhook 和企业微信 webhook。可以在 `internal/schedule/push.go` 添加更多渠道（钉钉、邮件、Slack 等）。
+
+---
+
+**Star ⭐ 本项目，让更多人看到 AI Agent 全自动开发 BI 的未来。**
