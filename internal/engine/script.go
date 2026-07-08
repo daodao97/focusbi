@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"unicode"
 
 	"xproxy/conf"
 
@@ -306,6 +307,9 @@ func buildWhere(vm *goja.Runtime, arg goja.Value) goja.Value {
 		if field == "" {
 			continue
 		}
+		if !isSafeSQLIdent(field) {
+			panic(vm.ToValue("where 非法字段名: " + field))
+		}
 		v := obj.Get(key).Export()
 		// 数组 -> IN
 		if arr, ok := v.([]any); ok {
@@ -361,6 +365,52 @@ func splitFieldOp(key string) (field, op string) {
 		}
 	}
 	return key, "="
+}
+
+// isSafeSQLIdent 校验字段名仅包含合法 SQL 标识符字符:
+// 普通标识符 [a-zA-Z_][a-zA-Z0-9_]*、点分段 (table.col)、反引号/双引号/方括号引用。
+// 防止脚本注入非法字符绕过参数化防护 (如字段名带分号、注释符等)。
+func isSafeSQLIdent(s string) bool {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return false
+	}
+	// 引用标识符: `name` / "name" / [name]
+	if len(s) >= 2 {
+		switch s[0] {
+		case '`':
+			return strings.Count(s, "`") == 2 && s[len(s)-1] == '`' && len(s) > 2
+		case '"':
+			return strings.Count(s, `"`) == 2 && s[len(s)-1] == '"' && len(s) > 2
+		case '[':
+			return s[len(s)-1] == ']' && len(s) > 2 && !strings.ContainsRune(s[1:len(s)-1], ']')
+		}
+	}
+	// 点分段: 每段都是合法标识符
+	for _, part := range strings.Split(s, ".") {
+		if !isPlainIdent(part) {
+			return false
+		}
+	}
+	return true
+}
+
+func isPlainIdent(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i, r := range s {
+		if i == 0 {
+			if !unicode.IsLetter(r) && r != '_' {
+				return false
+			}
+		} else {
+			if !unicode.IsLetter(r) && !unicode.IsDigit(r) && r != '_' {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // isEmptyVal 判断标量是否为"空" (应跳过的条件值)。

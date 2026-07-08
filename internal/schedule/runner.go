@@ -3,6 +3,7 @@ package schedule
 import (
 	"errors"
 	"fmt"
+	"net/url"
 	"strings"
 	"time"
 
@@ -113,7 +114,7 @@ func queryString(params map[string]string) string {
 		if strings.HasPrefix(k, "_") { // 跳过内部参数 (如 _nocache)
 			continue
 		}
-		parts = append(parts, k+"="+v)
+		parts = append(parts, url.QueryEscape(k)+"="+url.QueryEscape(v))
 	}
 	return strings.Join(parts, "&")
 }
