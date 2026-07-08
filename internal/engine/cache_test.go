@@ -142,6 +142,19 @@ SELECT day, pv FROM pv WHERE day = '2026-06-24';
 	if got != 888 {
 		t.Fatalf("no-cache pv = %v, want 888", res.Blocks[0].Rows[0]["pv"])
 	}
+
+	// 刷新应回写缓存: 再改库后普通运行, 命中的应是刷新时写入的 888 而非最新值。
+	if _, err := datasource.Query("default", `UPDATE pv SET pv = 555 WHERE day = '2026-06-24'`); err != nil {
+		t.Fatalf("update pv: %v", err)
+	}
+	res, err = r.Run(content, nil)
+	if err != nil {
+		t.Fatalf("Run after refresh: %v", err)
+	}
+	got, _ = toFloat(res.Blocks[0].Rows[0]["pv"])
+	if got != 888 {
+		t.Fatalf("刷新后缓存 pv = %v, want 888 (刷新应回写缓存)", res.Blocks[0].Rows[0]["pv"])
+	}
 }
 
 func TestRunScriptQueryCacheUsesCachedResult(t *testing.T) {

@@ -46,21 +46,24 @@ func cacheKey(dsn, sql string, args ...any) string {
 	return hex.EncodeToString(h[:])
 }
 
-// cachedQuery 在 ttl>0 时走缓存执行查询; ttl<=0 或 bypass=true 时直连。
+// cachedQuery 在 ttl>0 时走缓存执行查询; ttl<=0 时直连。
+// bypass=true (前端刷新) 时跳过读缓存但仍回写, 让刷新后的新数据对其他访问者生效。
 // 命中缓存返回结果副本, 避免后续列格式化/排序/透视等处理污染缓存。
 func cachedQuery(dsn, sql string, ttlSec int, bypass bool, args ...any) (*datasource.QueryResult, error) {
-	if ttlSec <= 0 || bypass {
+	if ttlSec <= 0 {
 		return datasource.Query(dsn, sql, args...)
 	}
 	key := cacheKey(dsn, sql, args...)
 	now := nowFunc()
 
-	queryCacheMu.Lock()
-	if e, ok := queryCache[key]; ok && now.Before(e.expires) {
+	if !bypass {
+		queryCacheMu.Lock()
+		if e, ok := queryCache[key]; ok && now.Before(e.expires) {
+			queryCacheMu.Unlock()
+			return cloneQueryResult(e.res), nil
+		}
 		queryCacheMu.Unlock()
-		return cloneQueryResult(e.res), nil
 	}
-	queryCacheMu.Unlock()
 
 	res, err := datasource.Query(dsn, sql, args...)
 	if err != nil {
