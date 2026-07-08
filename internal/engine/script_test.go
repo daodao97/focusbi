@@ -291,6 +291,19 @@ func TestRunScriptWhereEmpty(t *testing.T) {
 	}
 }
 
+func TestRunScriptWhereIllegalFieldSkipped(t *testing.T) {
+	// 非法字段名 (带分号/注释符) 被静默跳过, 不影响正常条件
+	code := `const w = where({valid:1, 'x;DROP':2, 'y--':3}); result.markdown(w.sql)`
+	blocks, _, _ := runScript(code, scriptContext{})
+	md := blocks[0].Markdown
+	if !strings.Contains(md, "valid = ?") {
+		t.Errorf("合法字段应保留: %q", md)
+	}
+	if strings.Contains(md, "DROP") || strings.Contains(md, "y--") || strings.Contains(md, "x;") {
+		t.Errorf("非法字段应被跳过: %q", md)
+	}
+}
+
 // ---- 脚本 table 复用列级处理 (tag/percent/enum/sum) ----
 
 func TestRunScriptTableColumnPipeline(t *testing.T) {

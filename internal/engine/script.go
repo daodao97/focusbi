@@ -308,7 +308,7 @@ func buildWhere(vm *goja.Runtime, arg goja.Value) goja.Value {
 			continue
 		}
 		if !isSafeSQLIdent(field) {
-			panic(vm.ToValue("where 非法字段名: " + field))
+			continue // 非法字段名跳过 (防护注入, 不崩脚本)
 		}
 		v := obj.Get(key).Export()
 		// 数组 -> IN
