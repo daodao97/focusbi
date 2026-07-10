@@ -137,8 +137,9 @@ type createReportIn struct {
 }
 
 type idOut struct {
-	ID  int    `json:"id"`
-	URL string `json:"url,omitempty" jsonschema:"新建报表的控制台查看链接 (folder 或站点地址未配置时为空)"`
+	ID         int    `json:"id"`
+	URL        string `json:"url,omitempty" jsonschema:"新建报表的控制台查看链接 (folder 或站点地址未配置时为空)"`
+	NextAction string `json:"next_action,omitempty" jsonschema:"下一步建议; 报表内容保存为草稿后需调用 publish_report 才会在查看页生效"`
 }
 
 type updateReportIn struct {
@@ -150,7 +151,8 @@ type updateReportIn struct {
 }
 
 type okOut struct {
-	OK bool `json:"ok"`
+	OK         bool   `json:"ok"`
+	NextAction string `json:"next_action,omitempty" jsonschema:"下一步建议; 草稿修改后需调用 publish_report 才会在查看页生效"`
 }
 
 type publishIn struct {
@@ -198,15 +200,15 @@ func registerTools(s *mcp.Server) {
 		previewTemplateTool)
 
 	mcp.AddTool(s, &mcp.Tool{Name: "create_report",
-		Description: "创建一个报表或文件夹。需对目标父级有写权限; 根目录需全局 report 写权限。"},
+		Description: "创建一个报表或文件夹。报表内容只写入开发版草稿; 若用户要在查看页看到结果, 预览通过后必须继续调用 publish_report。需对目标父级有写权限; 根目录需全局 report 写权限。"},
 		createReportTool)
 
 	mcp.AddTool(s, &mcp.Tool{Name: "update_report",
-		Description: "更新报表的开发版草稿/名称/数据源/设置 (只动草稿, 不影响已发布版)。需对该报表有写权限。"},
+		Description: "更新报表的开发版草稿/名称/数据源/设置 (只动草稿, 不影响已发布版); 若用户要在查看页看到修改, 预览通过后必须继续调用 publish_report。需对该报表有写权限。"},
 		updateReportTool)
 
 	mcp.AddTool(s, &mcp.Tool{Name: "publish_report",
-		Description: "把开发版草稿发布为正式版 (查看者与定时任务据此); 同时记录一个版本快照。需对该报表有写权限。"},
+		Description: "把开发版草稿发布为正式版 (查看页、查看者与定时任务据此); 同时记录一个版本快照。create_report/update_report 后要让查看页生效就调用本工具。需对该报表有写权限。"},
 		publishReportTool)
 }
 
@@ -474,7 +476,11 @@ func createReportTool(ctx context.Context, _ *mcp.CallToolRequest, in createRepo
 	if err != nil {
 		return nil, idOut{}, err
 	}
-	return nil, idOut{ID: int(id), URL: reportURL(&dao.ReportRecord{Id: int(id), Type: typ})}, nil
+	out := idOut{ID: int(id), URL: reportURL(&dao.ReportRecord{Id: int(id), Type: typ})}
+	if typ != "folder" {
+		out.NextAction = "内容已保存为开发版草稿; 请先用 preview_template 验证, 然后调用 publish_report 发布, 否则查看页仍看不到新内容。"
+	}
+	return nil, out, nil
 }
 
 func updateReportTool(ctx context.Context, _ *mcp.CallToolRequest, in updateReportIn) (*mcp.CallToolResult, okOut, error) {
@@ -504,7 +510,10 @@ func updateReportTool(ctx context.Context, _ *mcp.CallToolRequest, in updateRepo
 	if err := dao.UpdateReportByID(in.ID, updates); err != nil {
 		return nil, okOut{}, err
 	}
-	return nil, okOut{OK: true}, nil
+	return nil, okOut{
+		OK:         true,
+		NextAction: "已更新开发版草稿; 请先用 preview_template 验证, 然后调用 publish_report 发布, 否则查看页仍显示旧的已发布版。",
+	}, nil
 }
 
 func publishReportTool(ctx context.Context, _ *mcp.CallToolRequest, in publishIn) (*mcp.CallToolResult, okOut, error) {
@@ -532,7 +541,7 @@ func publishReportTool(ctx context.Context, _ *mcp.CallToolRequest, in publishIn
 	}
 	// 记录版本快照 (与 REST publishReport 行为一致); 失败不阻断发布。
 	_ = dao.AddReportVersion(in.ID, r.DevContent, pr.user.Id, pr.user.Nick)
-	return nil, okOut{OK: true}, nil
+	return nil, okOut{OK: true, NextAction: "已发布; 查看页、查看者和定时任务现在会使用最新发布版。"}, nil
 }
 
 // reportURL 构造报表在控制台的查看链接, 方便在 AI 工具里直接点开。

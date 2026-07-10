@@ -120,10 +120,33 @@ func TestCreateReportRequiresWrite(t *testing.T) {
 	if out.ID <= 0 {
 		t.Fatalf("应返回新报表 id, got %d", out.ID)
 	}
+	if !strings.Contains(out.NextAction, "publish_report") {
+		t.Fatalf("创建报表后应提示发布, got %q", out.NextAction)
+	}
 	// 仅单报表写权限不能扩展成根目录创建权限。
 	singleCtx := ctxWithPerm(t, map[string]string{"report.5": "rw"})
 	if _, _, err := createReportTool(singleCtx, nil, createReportIn{Name: "root"}); err == nil {
 		t.Fatal("单报表写权限不应能在根目录创建报表")
+	}
+}
+
+func TestUpdateReportRemindsPublish(t *testing.T) {
+	setupTestDB(t)
+	ctx := ctxWithPerm(t, map[string]string{"report": "Rrw"})
+	_, created, err := createReportTool(ctx, nil, createReportIn{Name: "r1", DevContent: "SELECT 1;"})
+	if err != nil {
+		t.Fatalf("create report: %v", err)
+	}
+	content := "SELECT 2;"
+	_, out, err := updateReportTool(ctx, nil, updateReportIn{ID: created.ID, DevContent: &content})
+	if err != nil {
+		t.Fatalf("update report: %v", err)
+	}
+	if !out.OK {
+		t.Fatal("update should return ok")
+	}
+	if !strings.Contains(out.NextAction, "publish_report") {
+		t.Fatalf("更新报表后应提示发布, got %q", out.NextAction)
 	}
 }
 

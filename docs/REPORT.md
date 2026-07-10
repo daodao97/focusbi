@@ -284,8 +284,9 @@ ai:
 | `list_datasources` / `list_databases` / `list_tables` / `describe_table` | 探数据源 schema (脱敏, 不回连接串/密钥) | `dsn:r` |
 | `query_raw` | 只读 SELECT 探数据 (拒非 SELECT/多语句, 限 200 行) | `dsn:r` |
 | `preview_template` | 试跑模板返回结构化结果 (含每块 error), 不落库 | 报表开发者 (任一 `report*:w`) |
-| `create_report` | 创建报表/文件夹 | 父级 `:w` / 根建需全局 `report:w` |
-| `update_report` / `publish_report` | 改草稿/发布 | `report.{id}:w` |
+| `create_report` | 创建报表/文件夹; 报表内容只进入开发版草稿, 查看页生效还要 `publish_report` | 父级 `:w` / 根建需全局 `report:w` |
+| `update_report` | 改开发版草稿; 查看页仍显示旧发布版 | `report.{id}:w` |
+| `publish_report` | 发布开发版草稿; 创建/更新后要让查看页生效必须调用它 | `report.{id}:w` |
 
 **客户端配置**:
 

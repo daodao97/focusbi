@@ -89,9 +89,9 @@ bearer_token_env_var = "FOCUSBI_TOKEN"
 | `describe_table` | 查看表的列定义 + 每列去重样例值 (判断枚举取值/日期粒度) | 数据源读 |
 | `query_raw` | 只读 SELECT 探数据 (拒非 SELECT / 多语句, 限 200 行) | 数据源读 |
 | `preview_template` | 试跑模板返回结构化结果, 出错区块带分类+修正建议; 传 `validate_only` 只校验不连库 | 报表写 (任一) |
-| `create_report` | 创建报表或文件夹 | 父级写 / 根建需全局 `report:w` |
-| `update_report` | 更新报表的开发版草稿 / 名称 / 数据源 / 设置 | 该报表写 |
-| `publish_report` | 把开发版草稿发布为正式版 (并记录版本快照) | 该报表写 |
+| `create_report` | 创建报表或文件夹; 报表内容只进入开发版草稿, 查看页生效还要 `publish_report` | 父级写 / 根建需全局 `report:w` |
+| `update_report` | 更新报表的开发版草稿 / 名称 / 数据源 / 设置; 查看页仍显示旧发布版 | 该报表写 |
+| `publish_report` | 把开发版草稿发布为正式版 (并记录版本快照); 创建/更新后要让查看页生效必须调用它 | 该报表写 |
 
 还提供一个资源 `focusbi://syntax` (同 `get_syntax_doc`, 资源形式)。
 
@@ -105,6 +105,7 @@ bearer_token_env_var = "FOCUSBI_TOKEN"
 3. **写并校验**: "写一个按渠道统计近 7 天销售额的报表, 带折线图" → AI 生成模板,
    用 `preview_template` 试跑, 按返回的区块错误自动修。
 4. **落库发布**: "没问题, 创建并发布" → `create_report` + `publish_report`。
+   如果是修改已有报表, 则是 `update_report` + `publish_report`。
 
 发布后报表即对有权限的查看者可见, 也能配定时任务。
 

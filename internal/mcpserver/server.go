@@ -13,7 +13,8 @@ const serverInstructions = `FocusBI 报表开发 MCP 服务。典型流程:
 1. 先用 get_syntax_doc (或读资源 focusbi://syntax) 了解报表模板语法;
 2. 用 list_datasources / list_tables / describe_table / query_raw 探数据源 schema;
 3. 编写模板后用 preview_template 试跑校验 (看每个 block 的 error 字段);
-4. create_report 创建, update_report 改开发版草稿, publish_report 发布。
+4. create_report 创建或 update_report 修改后只会保存开发版草稿;
+5. 用户要在报表查看页看到新内容时, 必须在预览通过后调用 publish_report 发布。
 所有操作都受调用者的 RBAC 权限限制。`
 
 // NewServer 构造一个注册了报表开发工具与资源的 MCP server。
