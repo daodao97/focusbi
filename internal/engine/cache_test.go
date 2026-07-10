@@ -201,7 +201,7 @@ if (cache.get('k') === undefined) {
 const v = cache.get('k')
 result.table({rows: [{n: v.n, len: v.list.length}]})
 `
-	blocks, _, _ := runScript(code, scriptContext{})
+	blocks, _, _ := runScript(code, scriptContext{cacheScope: "report:1"})
 	if len(blocks) != 1 || blocks[0].Error != "" {
 		t.Fatalf("blocks = %+v", blocks)
 	}
@@ -215,13 +215,17 @@ result.table({rows: [{n: v.n, len: v.list.length}]})
 const v = cache.get('k')
 result.table({rows: [{hit: v !== undefined && v.n === 42}]})
 `
-	blocks, _, _ = runScript(code2, scriptContext{})
+	blocks, _, _ = runScript(code2, scriptContext{cacheScope: "report:1"})
 	if hit, _ := blocks[0].Rows[0]["hit"].(bool); !hit {
 		t.Errorf("第二次运行应命中缓存, rows = %v", blocks[0].Rows)
 	}
+	blocks, _, _ = runScript(code2, scriptContext{cacheScope: "report:2"})
+	if hit, _ := blocks[0].Rows[0]["hit"].(bool); hit {
+		t.Error("不同报表作用域不应共享脚本缓存")
+	}
 
 	// noCache 时 get 强制未命中
-	blocks, _, _ = runScript(code2, scriptContext{noCache: true})
+	blocks, _, _ = runScript(code2, scriptContext{noCache: true, cacheScope: "report:1"})
 	if hit, _ := blocks[0].Rows[0]["hit"].(bool); hit {
 		t.Error("noCache 时 cache.get 应未命中")
 	}
@@ -232,7 +236,7 @@ cache.set('zero', 1, 0)
 cache.set('fn', function(){}, 60)
 result.table({rows: [{a: cache.get('zero') === undefined, b: cache.get('fn') === undefined}]})
 `
-	blocks, _, _ = runScript(code3, scriptContext{})
+	blocks, _, _ = runScript(code3, scriptContext{cacheScope: "report:1"})
 	if blocks[0].Error != "" {
 		t.Fatalf("err = %s", blocks[0].Error)
 	}
@@ -241,6 +245,24 @@ result.table({rows: [{a: cache.get('zero') === undefined, b: cache.get('fn') ===
 	}
 	if b, _ := blocks[0].Rows[0]["b"].(bool); !b {
 		t.Error("函数值不应缓存")
+	}
+}
+
+func TestInvalidateQueryCacheByDSN(t *testing.T) {
+	queryCacheMu.Lock()
+	queryCache = map[string]cacheEntry{
+		"a": {dsn: "one", expires: time.Now().Add(time.Hour)},
+		"b": {dsn: "two", expires: time.Now().Add(time.Hour)},
+	}
+	queryCacheMu.Unlock()
+	InvalidateQueryCache("one")
+	queryCacheMu.Lock()
+	defer queryCacheMu.Unlock()
+	if _, ok := queryCache["a"]; ok {
+		t.Fatal("目标数据源缓存未清理")
+	}
+	if _, ok := queryCache["b"]; !ok {
+		t.Fatal("其它数据源缓存不应被清理")
 	}
 }
 

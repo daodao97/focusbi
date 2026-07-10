@@ -2,8 +2,8 @@
 import { useRoute, useRouter } from 'vue-router'
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Fold, Expand, SwitchButton, DataAnalysis, Document, Coin, User, Setting, Bell, Key, Moon, Sunny } from '@element-plus/icons-vue'
-import { api, clearToken, getToken } from '@/api'
+import { Fold, Expand, SwitchButton, DataAnalysis, Document, Coin, User, Setting, Bell, Key, Moon, Sunny, Tools } from '@element-plus/icons-vue'
+import { api, clearSession, hasSession } from '@/api'
 import { buildTree } from '@/tree'
 import { perm, loadPerm, clearPerm, canWriteAnyReport } from '@/perm'
 import { useTheme } from '@/theme'
@@ -43,12 +43,12 @@ const reportTree = computed(() =>
   buildTree(reports.value.filter(r => r.type === 'folder' || r.visible !== false)))
 
 async function loadReports() {
-  if (isLoginPage.value || !getToken()) return
+  if (isLoginPage.value || !hasSession()) return
   reports.value = await api.listReports().catch(() => [])
 }
 
 async function loadMe() {
-  if (isLoginPage.value || !getToken()) return
+  if (isLoginPage.value || !hasSession()) return
   await loadPerm()
 }
 
@@ -69,6 +69,7 @@ const navItems = computed(() => {
   if (isAdmin.value) {
     items.push({ path: '/users', label: '用户管理', icon: User })
     items.push({ path: '/roles', label: '角色管理', icon: Setting })
+    items.push({ path: '/settings', label: '系统设置', icon: Tools })
   }
   return items
 })
@@ -85,6 +86,7 @@ const active = computed(() => {
   if (route.path.startsWith('/schedules')) return '/schedules'
   if (route.path.startsWith('/users')) return '/users'
   if (route.path.startsWith('/roles')) return '/roles'
+  if (route.path.startsWith('/settings')) return '/settings'
   if ((route.name === 'report-view' || route.name === 'report-edit') && route.params.id) {
     return `/reports/${route.params.id}`
   }
@@ -94,7 +96,7 @@ const active = computed(() => {
 
 async function logout() {
   await api.logout().catch(() => {})
-  clearToken()
+  clearSession()
   clearPerm()
   ElMessage.success('已退出')
   router.push({ name: 'login' })
@@ -159,6 +161,7 @@ onMounted(() => { loadReports(); loadMe() })
         <template v-if="isAdmin">
           <el-menu-item index="/users"><el-icon><User /></el-icon><span>用户管理</span></el-menu-item>
           <el-menu-item index="/roles"><el-icon><Setting /></el-icon><span>角色管理</span></el-menu-item>
+          <el-menu-item index="/settings"><el-icon><Tools /></el-icon><span>系统设置</span></el-menu-item>
         </template>
       </el-menu>
       <div class="user-bar">

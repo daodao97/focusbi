@@ -3,6 +3,7 @@ package api
 import (
 	"net/http"
 	"strings"
+	"time"
 
 	"xproxy/dao"
 	"xproxy/internal/auth"
@@ -115,7 +116,10 @@ func issueAndReturn(c *gin.Context, uid int, username string, isAdmin bool) {
 		fail(c, http.StatusInternalServerError, err.Error())
 		return
 	}
-	ok(c, gin.H{"token": token})
+	secure := c.Request.TLS != nil || strings.EqualFold(c.GetHeader("X-Forwarded-Proto"), "https")
+	c.SetSameSite(http.SameSiteStrictMode)
+	c.SetCookie(auth.SessionCookieName, token, int((7 * 24 * time.Hour).Seconds()), "/", "", secure, true)
+	ok(c, gin.H{"ok": true})
 }
 
 // me 返回当前用户信息与已编译的权限资源 (供前端做按钮显隐)。
@@ -138,7 +142,9 @@ func me(c *gin.Context) {
 }
 
 func logout(c *gin.Context) {
-	// JWT 无状态, 由前端丢弃 token 即可。
+	secure := c.Request.TLS != nil || strings.EqualFold(c.GetHeader("X-Forwarded-Proto"), "https")
+	c.SetSameSite(http.SameSiteStrictMode)
+	c.SetCookie(auth.SessionCookieName, "", -1, "/", "", secure, true)
 	ok(c, gin.H{"ok": true})
 }
 

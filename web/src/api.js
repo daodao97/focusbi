@@ -1,10 +1,11 @@
 // 统一的后端接口封装。后端约定: { code: 0, data } 成功; { code: 1, msg } 失败。
 const BASE = (import.meta.env.VITE_BASE_API || '/api')
 
-const TOKEN_KEY = 'focusbi_token'
-export function getToken() { return localStorage.getItem(TOKEN_KEY) || '' }
-export function setToken(t) { t ? localStorage.setItem(TOKEN_KEY, t) : localStorage.removeItem(TOKEN_KEY) }
-export function clearToken() { localStorage.removeItem(TOKEN_KEY) }
+const SESSION_KEY = 'focusbi_session_active'
+localStorage.removeItem('focusbi_token') // 清理旧版暴露给 JavaScript 的 JWT。
+export function hasSession() { return localStorage.getItem(SESSION_KEY) === '1' }
+export function markSession() { localStorage.setItem(SESSION_KEY, '1') }
+export function clearSession() { localStorage.removeItem(SESSION_KEY) }
 
 // 401 回调: 由应用注入 (跳登录页)。
 let onUnauthorized = null
@@ -12,17 +13,14 @@ export function setUnauthorizedHandler(fn) { onUnauthorized = fn }
 
 async function request(method, url, body) {
   const headers = { 'Content-Type': 'application/json' }
-  const token = getToken()
-  if (token) headers['Authorization'] = 'Bearer ' + token
-
-  const opt = { method, headers }
+  const opt = { method, headers, credentials: 'same-origin' }
   if (body !== undefined) opt.body = JSON.stringify(body)
   const res = await fetch(BASE + url, opt)
 
-  // 仅当"携带 token 的请求"被拒, 才判定为会话失效并跳登录。
-  // 登录/注册等本就无 token 的请求, 401 是业务错误 (如密码错误), 应透传真实提示。
-  if (res.status === 401 && token) {
-    clearToken()
+  // 登录/注册的 401 是业务错误; 其它接口 401 表示 HttpOnly 会话失效。
+  const authRequest = url === '/auth/login' || url === '/auth/register'
+  if (res.status === 401 && !authRequest) {
+    clearSession()
     if (onUnauthorized) onUnauthorized()
     throw new Error('登录已失效')
   }
@@ -39,14 +37,11 @@ async function request(method, url, body) {
 
 async function streamRequest(method, url, body, onEvent) {
   const headers = { 'Content-Type': 'application/json' }
-  const token = getToken()
-  if (token) headers['Authorization'] = 'Bearer ' + token
-
-  const opt = { method, headers }
+  const opt = { method, headers, credentials: 'same-origin' }
   if (body !== undefined) opt.body = JSON.stringify(body)
   const res = await fetch(BASE + url, opt)
-  if (res.status === 401 && token) {
-    clearToken()
+  if (res.status === 401) {
+    clearSession()
     if (onUnauthorized) onUnauthorized()
     throw new Error('登录已失效')
   }
@@ -97,6 +92,10 @@ export const api = {
   login: (username, password, turnstileToken = '') => request('POST', '/auth/login', { username, password, turnstile_token: turnstileToken }),
   me: () => request('GET', '/auth/me'),
   logout: () => request('POST', '/auth/logout'),
+
+  // 系统动态设置 (admin)
+  getSystemSettings: () => request('GET', '/system/settings'),
+  updateSystemSettings: (settings) => request('PUT', '/system/settings', settings),
 
   // 用户管理 (admin)
   listUsers: () => request('GET', '/user'),

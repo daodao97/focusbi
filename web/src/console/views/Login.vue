@@ -2,7 +2,7 @@
 import { nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { api, setToken } from '@/api'
+import { api, markSession } from '@/api'
 
 const router = useRouter()
 const route = useRoute()
@@ -103,10 +103,10 @@ async function submit() {
   }
   loading.value = true
   try {
-    const d = needRegister.value
+    needRegister.value
       ? await api.register(username.trim(), password, turnstileToken.value)
       : await api.login(username.trim(), password, turnstileToken.value)
-    setToken(d.token)
+    markSession()
     ElMessage.success(needRegister.value ? '注册成功, 已登录' : '登录成功')
     router.push(route.query.redirect || '/')
   } catch (e) {

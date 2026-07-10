@@ -348,6 +348,19 @@ func TestValidateReadOnlySQL(t *testing.T) {
 	}
 }
 
+func TestPrepareReadOnlySQLForcesOuterLimit(t *testing.T) {
+	got, err := PrepareReadOnlySQL("SELECT 1 AS n LIMIT 99999;", 201)
+	if err != nil {
+		t.Fatalf("PrepareReadOnlySQL: %v", err)
+	}
+	if !strings.Contains(got, "SELECT 1 AS n LIMIT 99999") || !strings.HasSuffix(got, "LIMIT 201") {
+		t.Fatalf("未使用外层硬限制: %q", got)
+	}
+	if _, err := PrepareReadOnlySQL("WITH x AS (DELETE FROM t RETURNING *) SELECT * FROM x", 201); err == nil {
+		t.Fatal("写 CTE 应被拒绝")
+	}
+}
+
 func TestRunRejectsWriteSQLBlock(t *testing.T) {
 	setupSQLiteDefault(t)
 	res, err := NewRunner("default").Run("WITH moved AS (DELETE FROM pv RETURNING day) SELECT * FROM moved;", nil)

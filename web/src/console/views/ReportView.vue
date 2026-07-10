@@ -10,6 +10,7 @@ import { useAutoRefresh } from '@/autorefresh'
 import ReportFilters from '@/components/ReportFilters.vue'
 import ReportBlocks from '@/components/ReportBlocks.vue'
 import TimingTooltip from '@/components/TimingTooltip.vue'
+import { sanitizeReportHtml } from '@/sanitize'
 
 // 编辑/分享按钮按后端返回的 can_write 显示。
 const canManage = computed(() => !!report.can_write)
@@ -20,6 +21,7 @@ const router = useRouter()
 
 const report = reactive({ id: 0, name: '', is_public: false, share_token: '', can_write: false })
 const result = ref(null)
+const safePrependContent = computed(() => sanitizeReportHtml(result.value?.prepend_content))
 const params = ref({})
 const loading = ref(false)
 
@@ -127,6 +129,7 @@ onMounted(load)
 
     <div class="sheet" v-loading="loading">
       <ReportFilters v-model="params" :filters="result?.filters || []" :loading="loading" @run="run" />
+      <div v-if="safePrependContent" class="prepend" v-html="safePrependContent"></div>
       <ReportBlocks v-if="result" :blocks="result.blocks" />
     </div>
 
@@ -160,6 +163,7 @@ onMounted(load)
 .title { margin: 0; font-size: 18px; }
 .actions { display: flex; gap: 8px; }
 .sheet { background: var(--el-bg-color); border-radius: 8px; padding: 24px; min-height: 200px; }
+.prepend { margin-bottom: 16px; }
 /* 长报表切换时 spinner 默认居中在很高的 sheet 内 (落在屏幕外)。用 sticky 让它在 sheet 内
    水平居中 (不受侧边栏影响, 避免 fixed 按整个视口居中导致左偏), 纵向随滚动贴住视口中央保持可见。 */
 .sheet :deep(.el-loading-spinner) { position: sticky; top: 50%; }

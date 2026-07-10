@@ -1,13 +1,16 @@
 package engine
 
 import (
+	"context"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 	"time"
 
 	"xproxy/conf"
+	"xproxy/internal/runtimecfg"
 
 	"github.com/dop251/goja"
 	"github.com/spf13/cast"
@@ -23,11 +26,65 @@ import (
 // 安全前提: 脚本 = 在服务器执行任意 JS, 仅限对报表有写权限 (report*:w) 者可写、内网信任环境部署。
 // goja 本身无文件/网络/exec 能力; 我们注入的 query (参数化) 与 fetch (任意外呼) 是仅有的外部面。
 
-// scriptTimeout 是单个脚本区块的总执行超时 (防死循环)。var 便于测试覆写。
-var scriptTimeout = 3 * time.Minute
+// scriptTimeout 非零时覆盖动态配置, 仅供单测缩短超时。
+var scriptTimeout time.Duration
 
 // fetchTimeout 是脚本内单个 fetch 请求的超时 (独立于脚本总超时)。
 const fetchTimeout = 30 * time.Second
+
+var scriptFetchClient = newScriptFetchClient()
+
+func newScriptFetchClient() *http.Client {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.Proxy = nil // 代理可能代替本机访问内网, 绕过目标地址检查。
+	transport.DialContext = scriptFetchDialContext
+	return &http.Client{
+		Timeout:   fetchTimeout,
+		Transport: transport,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 10 {
+				return fmt.Errorf("脚本 fetch 重定向次数过多")
+			}
+			mode, _ := runtimecfg.ScriptFetch()
+			return conf.ScriptFetchAllowed(mode, req.URL.String())
+		},
+	}
+}
+
+func scriptFetchDialContext(ctx context.Context, network, address string) (net.Conn, error) {
+	host, port, err := net.SplitHostPort(address)
+	if err != nil {
+		return nil, err
+	}
+	mode, _ := runtimecfg.ScriptFetch()
+	allowPrivate := conf.ScriptFetchHostExplicitlyAllowed(mode, host)
+	ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+	if err != nil {
+		return nil, err
+	}
+	dialer := &net.Dialer{Timeout: fetchTimeout}
+	var lastErr error
+	for _, addr := range ips {
+		if scriptFetchIPBlocked(addr.IP) && !allowPrivate {
+			lastErr = fmt.Errorf("脚本 fetch 不允许访问私网或本机地址")
+			continue
+		}
+		conn, err := dialer.DialContext(ctx, network, net.JoinHostPort(addr.IP.String(), port))
+		if err == nil {
+			return conn, nil
+		}
+		lastErr = err
+	}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("脚本 fetch 目标没有可用地址")
+	}
+	return nil, lastErr
+}
+
+func scriptFetchIPBlocked(ip net.IP) bool {
+	return ip == nil || !ip.IsGlobalUnicast() || ip.IsLoopback() || ip.IsPrivate() ||
+		ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified()
+}
 
 // scriptContext 是脚本执行所需的上下文。
 type scriptContext struct {
@@ -36,6 +93,7 @@ type scriptContext struct {
 	authz      func(dsn string) error // 数据源授权 (nil = 不校验)
 	blocks     map[string]Block       // 已执行完成的 block, 按 id 引用
 	noCache    bool                   // 旁路查询缓存
+	cacheScope string                 // 脚本 KV 缓存作用域 (空=禁用)
 }
 
 // runScript 执行一段脚本, 返回它产出的区块与过滤器。脚本出错/超时不崩报表, 以 Error 区块返回。
@@ -47,7 +105,11 @@ func runScript(code string, ctx scriptContext) (blocks []Block, filters []Filter
 	acc := &scriptResult{}
 
 	// 超时中断: 到点强制中断 VM (中断死循环/超长执行)。
-	timer := time.AfterFunc(scriptTimeout, func() {
+	timeout := scriptTimeout
+	if timeout <= 0 {
+		timeout = runtimecfg.ScriptTimeout()
+	}
+	timer := time.AfterFunc(timeout, func() {
 		vm.Interrupt("脚本执行超时")
 	})
 	defer timer.Stop()
@@ -149,13 +211,13 @@ func injectScriptAPI(vm *goja.Runtime, ctx scriptContext, acc *scriptResult) {
 		if ctx.noCache {
 			return goja.Undefined()
 		}
-		if v, ok := scriptCacheGet(call.Argument(0).String()); ok {
+		if v, ok := scriptCacheGet(ctx.cacheScope, call.Argument(0).String()); ok {
 			return vm.ToValue(v)
 		}
 		return goja.Undefined()
 	})
 	_ = cacheObj.Set("set", func(call goja.FunctionCall) goja.Value {
-		scriptCacheSet(call.Argument(0).String(), call.Argument(1).Export(), cast.ToInt(call.Argument(2).Export()))
+		scriptCacheSet(ctx.cacheScope, call.Argument(0).String(), call.Argument(1).Export(), cast.ToInt(call.Argument(2).Export()))
 		return goja.Undefined()
 	})
 	_ = vm.Set("cache", cacheObj)
@@ -687,7 +749,8 @@ func columnsForJS(cols []Column) []map[string]any {
 func scriptFetch(vm *goja.Runtime, call goja.FunctionCall) goja.Value {
 	url := call.Argument(0).String()
 	// SSRF 防护: 按 engine.script_fetch 配置校验目标 (off / 前缀白名单 / 默认放行)。
-	if err := conf.Get().ScriptFetchAllowed(url); err != nil {
+	mode, _ := runtimecfg.ScriptFetch()
+	if err := conf.ScriptFetchAllowed(mode, url); err != nil {
 		panic(vm.ToValue(err.Error()))
 	}
 	method := "GET"
@@ -715,8 +778,7 @@ func scriptFetch(vm *goja.Runtime, call goja.FunctionCall) goja.Value {
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
-	client := &http.Client{Timeout: fetchTimeout}
-	resp, err := client.Do(req)
+	resp, err := scriptFetchClient.Do(req)
 	if err != nil {
 		panic(vm.ToValue("fetch 失败: " + err.Error()))
 	}

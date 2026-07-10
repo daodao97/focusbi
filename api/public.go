@@ -4,9 +4,11 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"net/http"
+	"strconv"
 
 	"xproxy/dao"
 	"xproxy/internal/engine"
+	"xproxy/internal/runtimecfg"
 
 	"github.com/daodao97/xgo/xdb"
 	"github.com/gin-gonic/gin"
@@ -16,6 +18,10 @@ import (
 
 // publicGetReport 凭 share_token 返回报表的最小元信息 (仅名称)。
 func publicGetReport(c *gin.Context) {
+	if !runtimecfg.PublicShareEnabled() {
+		fail(c, http.StatusForbidden, "公开分享已被系统管理员关闭")
+		return
+	}
 	r, err := dao.GetReportByShareToken(c.Param("token"))
 	if err != nil {
 		if err == xdb.ErrNotFound {
@@ -30,6 +36,10 @@ func publicGetReport(c *gin.Context) {
 
 // publicRunReport 凭 share_token 执行报表 (公开访问可带过滤参数重查)。
 func publicRunReport(c *gin.Context) {
+	if !runtimecfg.PublicShareEnabled() {
+		fail(c, http.StatusForbidden, "公开分享已被系统管理员关闭")
+		return
+	}
 	r, err := dao.GetReportByShareToken(c.Param("token"))
 	if err != nil {
 		if err == xdb.ErrNotFound {
@@ -48,6 +58,7 @@ func publicRunReport(c *gin.Context) {
 		return
 	}
 	result, err := engine.NewRunner(r.DSN).
+		WithCacheScope("report:"+strconv.Itoa(r.Id)).
 		WithNoCache(noCacheParam(req.Params)).
 		WithAuthz(engine.AllowlistAuthz(settings.ApprovedDSNs)).
 		Run(r.Content, req.Params)
@@ -78,6 +89,10 @@ func setReportShare(c *gin.Context) {
 	var req shareReq
 	if err := c.ShouldBindJSON(&req); err != nil {
 		fail(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	if req.Enable && !runtimecfg.PublicShareEnabled() {
+		fail(c, http.StatusForbidden, "公开分享已被系统管理员关闭")
 		return
 	}
 

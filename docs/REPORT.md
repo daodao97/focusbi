@@ -106,7 +106,13 @@ MySQL 数据源可通过 SSH 跳板机连接 (在数据源弹窗中开启「SSH 
 
 **账号**: 独立 `user` 表 (bcrypt 密码)。**首位注册即超级管理员** —— 系统空表时
 `POST /api/auth/register` 开放, 注册者 `is_admin=1`; 表非空后注册关闭, 后续用户由管理员
-在「用户管理」建号。认证用 **JWT** (前端 localStorage 存 token, 请求带 `Authorization: Bearer`)。
+在「用户管理」建号。认证用 **JWT**，控制台通过 `HttpOnly + SameSite=Strict` Cookie 保存会话；
+JavaScript 不接触登录凭证。MCP 等程序化客户端使用独立 API Token 和 `Authorization: Bearer`。
+
+**系统设置**: 管理员可在后台动态调整 SQL 查询超时/并发数、脚本超时/`fetch()` 策略、
+任务调度和公开分享开关。设置保存到 `system_setting` 表并覆盖对应 YAML 默认值；当前实例
+立即生效，其他实例通过短 TTL 自动同步，无需重启或重新发布。`schedule.enabled` 只控制运行中
+的调度，进程是否加载调度器仍由启动环境变量 `ENABLE_CRON` 决定。
 
 **权限模型**: 用户挂多个角色 (`user.roles` 逗号分隔角色 id), 角色持有 `resource` JSON 权限,
 支持 `parent_id` **父角色继承**。资源串按 `.` 分段成树:

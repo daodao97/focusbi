@@ -33,6 +33,7 @@ func Init() error {
 	User = xdb.New("user")
 	Role = xdb.New("role")
 	APIToken = xdb.New("api_token")
+	SystemSetting = xdb.New("system_setting")
 
 	// 引入按数据源权限后, 给旧角色回填全局 dsn:r, 保持升级前行为 (幂等)。
 	if err := BackfillRoleDsnPerm(); err != nil {

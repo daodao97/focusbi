@@ -12,9 +12,11 @@ import (
 const (
 	ctxUser = "auth_user"
 	ctxPerm = "auth_perm"
+	// SessionCookieName 是控制台浏览器登录态使用的 HttpOnly Cookie。
+	SessionCookieName = "focusbi_session"
 )
 
-// Middleware 解析 JWT, 加载用户并构建权限, 注入 gin.Context。
+// Middleware 从 Bearer 或 HttpOnly 会话 Cookie 解析 JWT, 加载用户并构建权限, 注入 gin.Context。
 // 未携带/无效 token 时返回 401。
 func Middleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
@@ -105,7 +107,8 @@ func PermOf(c *gin.Context) *Permission {
 func bearerToken(c *gin.Context) string {
 	h := c.GetHeader("Authorization")
 	if h == "" {
-		return ""
+		token, _ := c.Cookie(SessionCookieName)
+		return strings.TrimSpace(token)
 	}
 	if strings.HasPrefix(strings.ToLower(h), "bearer ") {
 		return strings.TrimSpace(h[7:])

@@ -106,6 +106,9 @@ func Setup(e *gin.Engine) {
 		// 用户 / 角色管理: 仅管理员
 		admin := authed.Group("", auth.RequireAdmin())
 		{
+			admin.GET("/system/settings", getSystemSettings)
+			admin.PUT("/system/settings", updateSystemSettings)
+
 			admin.GET("/user", listUsersAPI)
 			admin.POST("/user", createUserAPI)
 			admin.PUT("/user/:id", updateUserAPI)
@@ -201,6 +204,7 @@ func updateDsn(c *gin.Context) {
 	// 取旧记录: 失效旧连接/隧道缓存 (名称可能变更) + 补回前端未改动的脱敏凭据 (**** 占位)。
 	if old, err := dao.GetDsnByID(id); err == nil {
 		datasource.Invalidate(old.Name)
+		engine.InvalidateQueryCache(old.Name)
 		r.MergeSecretsFrom(old)
 	}
 	if err := dao.UpdateDsnByID(id, r.Record()); err != nil {
@@ -208,6 +212,7 @@ func updateDsn(c *gin.Context) {
 		return
 	}
 	datasource.Invalidate(r.Name)
+	engine.InvalidateQueryCache(r.Name)
 	ok(c, gin.H{"id": id})
 }
 
@@ -218,6 +223,7 @@ func deleteDsn(c *gin.Context) {
 	}
 	if old, err := dao.GetDsnByID(id); err == nil {
 		datasource.Invalidate(old.Name)
+		engine.InvalidateQueryCache(old.Name)
 	}
 	if err := dao.DeleteDsnByID(id); err != nil {
 		fail(c, http.StatusInternalServerError, err.Error())
@@ -379,10 +385,10 @@ func requireRootReportWrite(c *gin.Context) bool {
 	return false
 }
 
-// requireWritableParent 校验目标父级 parentID 合法且用户可写 (create/update/move 共用)。
+// requireWritableParent 校验目标父级 parentID 合法、用户可写且不会让树成环。
 // parentID==0 表示根目录, 需全局 report:w; 单报表写权限不能扩展到根级全局空间。
 // 无则写对应错误并返回 false。
-func requireWritableParent(c *gin.Context, parentID int) bool {
+func requireWritableParent(c *gin.Context, parentID, movingID int) bool {
 	if parentID == 0 {
 		return requireRootReportWrite(c)
 	}
@@ -406,7 +412,24 @@ func requireWritableParent(c *gin.Context, parentID int) bool {
 		fail(c, http.StatusForbidden, "无权在该目录下操作报表")
 		return false
 	}
+	if movingID > 0 && reportParentWouldCycle(movingID, parentID, parents) {
+		fail(c, http.StatusBadRequest, "不能移动到自身或自己的子目录下")
+		return false
+	}
 	return true
+}
+
+// reportParentWouldCycle 判断把 movingID 挂到 parentID 下是否会形成环。
+// 同时对库中已有坏环 fail-closed, 避免继续扩大损坏范围。
+func reportParentWouldCycle(movingID, parentID int, parents map[int]int) bool {
+	seen := map[int]bool{}
+	for cur := parentID; cur > 0; cur = parents[cur] {
+		if cur == movingID || seen[cur] {
+			return true
+		}
+		seen[cur] = true
+	}
+	return false
 }
 
 type reportViewRecord struct {
@@ -448,17 +471,26 @@ func listReports(c *gin.Context) {
 	ok(c, filtered)
 }
 
-// folderHasReadableChild 判断某文件夹是否含可读后代 (递归)。
+// folderHasReadableChild 判断某文件夹是否含可读后代。使用显式 visited,
+// 即使历史数据中已有环也能终止。
 func folderHasReadableChild(folderID int, list []*dao.ReportRecord, readable map[int]bool) bool {
+	children := make(map[int][]*dao.ReportRecord, len(list))
 	for _, r := range list {
-		if r.ParentID != folderID {
-			continue
-		}
-		if readable[r.Id] {
-			return true
-		}
-		if r.IsFolder() && folderHasReadableChild(r.Id, list, readable) {
-			return true
+		children[r.ParentID] = append(children[r.ParentID], r)
+	}
+	seen := map[int]bool{folderID: true}
+	queue := []int{folderID}
+	for len(queue) > 0 {
+		id := queue[0]
+		queue = queue[1:]
+		for _, r := range children[id] {
+			if readable[r.Id] {
+				return true
+			}
+			if r.IsFolder() && !seen[r.Id] {
+				seen[r.Id] = true
+				queue = append(queue, r.Id)
+			}
 		}
 	}
 	return false
@@ -491,7 +523,7 @@ func createReport(c *gin.Context) {
 		return
 	}
 	// 指定父级时: 父级须为存在的文件夹且用户对其有写权限 (防在无权目录下建报表)。
-	if !requireWritableParent(c, r.ParentID) {
+	if !requireWritableParent(c, r.ParentID, 0) {
 		return
 	}
 	id, err := dao.CreateReport(&r)
@@ -518,8 +550,13 @@ func updateReport(c *gin.Context) {
 	// Record() 会写 parent_id, 即更新也能移动报表; 若本次改变了父级, 需与 create/reorder 一致
 	// 校验新父级合法且可写, 否则可借 PUT 把报表移进无权目录或挂到非文件夹节点下。
 	// 仅在父级真正变更时校验: 否则对 report.<id>:w (父文件夹无权) 的用户会误伤正常编辑。
-	if old, err := dao.GetReportByID(id); err == nil && old.ParentID != r.ParentID {
-		if !requireWritableParent(c, r.ParentID) {
+	old, err := dao.GetReportByID(id)
+	if err != nil {
+		fail(c, http.StatusNotFound, "报表不存在")
+		return
+	}
+	if old.ParentID != r.ParentID {
+		if !requireWritableParent(c, r.ParentID, id) {
 			return
 		}
 	}
@@ -681,8 +718,13 @@ func deleteReport(c *gin.Context) {
 	if !requireReportWrite(c, id) {
 		return
 	}
-	// 文件夹非空时禁止删除 (需先清空或移走子节点)
-	if n, err := dao.CountReportChildren(id); err == nil && n > 0 {
+	// 文件夹非空时禁止删除 (需先清空或移走子节点)。统计失败时不继续删除, 避免遗留孤儿节点。
+	n, err := dao.CountReportChildren(id)
+	if err != nil {
+		fail(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if n > 0 {
 		fail(c, http.StatusBadRequest, "文件夹非空, 请先移走或删除其中的报表")
 		return
 	}
@@ -810,6 +852,7 @@ func runReport(c *gin.Context) {
 
 	noCache := noCacheParam(req.Params)
 	result, err := engine.NewRunner(r.DSN).
+		WithCacheScope(fmt.Sprintf("report:%d", r.Id)).
 		WithNoCache(noCache).
 		WithAuthz(dsnAuthzOf(c)). // 按调用者权限校验报表触达的每个数据源
 		WithTrace(reportRunTrace(c, id, r.Name, noCache)).

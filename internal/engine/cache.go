@@ -19,6 +19,7 @@ import (
 var nowFunc = time.Now
 
 type cacheEntry struct {
+	dsn     string
 	res     *datasource.QueryResult
 	expires time.Time
 }
@@ -37,12 +38,12 @@ var (
 )
 
 // cacheKey 生成 dsn+sql+args 的稳定键。
-func cacheKey(dsn, sql string, args ...any) string {
+func cacheKey(identity, sql string, args ...any) string {
 	argBytes, err := json.Marshal(args)
 	if err != nil {
 		argBytes = []byte(fmt.Sprint(args...))
 	}
-	h := sha256.Sum256([]byte(dsn + "\x00" + sql + "\x00" + string(argBytes)))
+	h := sha256.Sum256([]byte(identity + "\x00" + sql + "\x00" + string(argBytes)))
 	return hex.EncodeToString(h[:])
 }
 
@@ -53,7 +54,11 @@ func cachedQuery(dsn, sql string, ttlSec int, bypass bool, args ...any) (*dataso
 	if ttlSec <= 0 {
 		return datasource.Query(dsn, sql, args...)
 	}
-	key := cacheKey(dsn, sql, args...)
+	identity, err := datasource.CacheIdentity(dsn)
+	if err != nil {
+		return nil, err
+	}
+	key := cacheKey(identity, sql, args...)
 	now := nowFunc()
 
 	if !bypass {
@@ -76,15 +81,34 @@ func cachedQuery(dsn, sql string, ttlSec int, bypass bool, args ...any) (*dataso
 	queryCacheMu.Lock()
 	pruneExpiredLocked(now)
 	if _, exists := queryCache[key]; exists || len(queryCache) < maxCacheEntries {
-		queryCache[key] = cacheEntry{res: cloneQueryResult(res), expires: now.Add(time.Duration(ttlSec) * time.Second)}
+		queryCache[key] = cacheEntry{dsn: normalizedDSNName(dsn), res: cloneQueryResult(res), expires: now.Add(time.Duration(ttlSec) * time.Second)}
 	}
 	queryCacheMu.Unlock()
 	return res, nil
 }
 
+// InvalidateQueryCache 清理某个数据源在当前进程的全部查询结果缓存。
+// 多实例场景仍由 CacheIdentity 保证其它实例不会命中旧配置条目。
+func InvalidateQueryCache(dsn string) {
+	dsn = normalizedDSNName(dsn)
+	queryCacheMu.Lock()
+	for key, entry := range queryCache {
+		if entry.dsn == dsn {
+			delete(queryCache, key)
+		}
+	}
+	queryCacheMu.Unlock()
+}
+
+func normalizedDSNName(dsn string) string {
+	if dsn == "" {
+		return "default"
+	}
+	return dsn
+}
+
 // 脚本自定义缓存 (脚本 API cache.get/set): 进程内 KV, 值 JSON 序列化存储 (天然深拷贝,
-// 防止多次运行共享可变对象)。键为脚本自定义字符串, **全局命名空间** (跨报表共享, 也可能冲突,
-// 建议脚本自带前缀如 'sales:xxx')。
+// 防止多次运行共享可变对象)。键自动按报表作用域隔离。
 // ponytail: 与 queryCache 同样的硬上限策略, 不够再统一抽象。
 var (
 	maxScriptCacheEntries = 500     // 条目数上限
@@ -102,7 +126,11 @@ var (
 )
 
 // scriptCacheGet 返回反序列化后的值; 未命中/已过期返回 (nil, false)。
-func scriptCacheGet(key string) (any, bool) {
+func scriptCacheGet(scope, key string) (any, bool) {
+	key = scriptCacheKey(scope, key)
+	if key == "" {
+		return nil, false
+	}
 	now := nowFunc()
 	scriptCacheMu.Lock()
 	e, ok := scriptCache[key]
@@ -118,7 +146,8 @@ func scriptCacheGet(key string) (any, bool) {
 }
 
 // scriptCacheSet 序列化后写入; ttl<=0、序列化失败或超限时静默不缓存 (缓存本就是尽力而为)。
-func scriptCacheSet(key string, val any, ttlSec int) {
+func scriptCacheSet(scope, key string, val any, ttlSec int) {
+	key = scriptCacheKey(scope, key)
 	if key == "" || ttlSec <= 0 {
 		return
 	}
@@ -137,6 +166,13 @@ func scriptCacheSet(key string, val any, ttlSec int) {
 		scriptCache[key] = scriptCacheEntry{data: data, expires: now.Add(time.Duration(ttlSec) * time.Second)}
 	}
 	scriptCacheMu.Unlock()
+}
+
+func scriptCacheKey(scope, key string) string {
+	if scope == "" || key == "" {
+		return ""
+	}
+	return scope + "\x00" + key
 }
 
 func cloneQueryResult(res *datasource.QueryResult) *datasource.QueryResult {

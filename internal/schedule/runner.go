@@ -33,6 +33,7 @@ func Execute(sub *dao.ScheduleRecord) error {
 		return fmt.Errorf("报表未完成数据源预授权, 请重新发布或保存定时任务")
 	}
 	result, err := engine.NewRunner(report.DSN).
+		WithCacheScope(fmt.Sprintf("report:%d", report.Id)).
 		WithNoCache(true).
 		WithAuthz(engine.AllowlistAuthz(settings.ApprovedDSNs)).
 		Run(report.Content, sub.Params)

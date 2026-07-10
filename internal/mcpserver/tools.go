@@ -3,7 +3,6 @@ package mcpserver
 import (
 	"context"
 	"fmt"
-	"regexp"
 	"sort"
 	"strings"
 
@@ -325,20 +324,14 @@ func describeTableTool(ctx context.Context, _ *mcp.CallToolRequest, in describeT
 	return nil, describeTableOut{Columns: cols}, nil
 }
 
-// selectOnlyRe 粗校验语句以 SELECT 或 WITH 开头 (去掉前导注释/空白后)。
-var selectOnlyRe = regexp.MustCompile(`(?is)^\s*(with|select)\b`)
-
 func queryRawTool(ctx context.Context, _ *mcp.CallToolRequest, in queryRawIn) (*mcp.CallToolResult, queryRawOut, error) {
 	if err := requireDsnReadByName(ctx, in.DSN); err != nil {
 		return nil, queryRawOut{}, err
 	}
-	sql := strings.TrimSpace(in.SQL)
-	if !selectOnlyRe.MatchString(sql) {
-		return nil, queryRawOut{}, fmt.Errorf("query_raw 仅支持只读 SELECT/WITH 查询")
-	}
-	// 拒绝多语句, 防夹带写操作。
-	if strings.Contains(strings.TrimRight(sql, ";"), ";") {
-		return nil, queryRawOut{}, fmt.Errorf("query_raw 不支持多条语句")
+	// 多取一行用于判断是否截断; 校验和补 LIMIT 复用报表引擎的统一安全策略。
+	sql, err := engine.PrepareReadOnlySQL(strings.TrimSpace(in.SQL), queryRawMaxRows+1)
+	if err != nil {
+		return nil, queryRawOut{}, err
 	}
 	res, err := datasource.Query(in.DSN, sql)
 	if err != nil {

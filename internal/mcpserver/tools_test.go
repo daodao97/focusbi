@@ -225,6 +225,7 @@ func TestQueryRawSelectOnly(t *testing.T) {
 		"UPDATE biz SET amount=0",
 		"DROP TABLE biz",
 		"SELECT 1; DROP TABLE biz", // 多语句
+		"WITH deleted AS (DELETE FROM biz RETURNING *) SELECT * FROM deleted",
 	} {
 		if _, _, err := queryRawTool(ctx, nil, queryRawIn{DSN: "default", SQL: sql}); err == nil {
 			t.Errorf("应拒绝非只读/多语句: %q", sql)
@@ -238,6 +239,23 @@ func TestQueryRawSelectOnly(t *testing.T) {
 	}
 	if len(out.Rows) != 2 {
 		t.Fatalf("应返回 2 行, got %d", len(out.Rows))
+	}
+}
+
+func TestQueryRawLimitsBeforeExecution(t *testing.T) {
+	setupTestDB(t)
+	ctx := ctxWithPerm(t, map[string]string{"dsn": "r"})
+	for i := 0; i < queryRawMaxRows+20; i++ {
+		if _, err := datasource.Query("default", "INSERT INTO biz(day, amount) VALUES (?, ?)", fmt.Sprintf("2026-07-%02d", i+1), i); err != nil {
+			t.Fatalf("insert row: %v", err)
+		}
+	}
+	_, out, err := queryRawTool(ctx, nil, queryRawIn{DSN: "default", SQL: "SELECT day, amount FROM biz ORDER BY amount"})
+	if err != nil {
+		t.Fatalf("query_raw: %v", err)
+	}
+	if len(out.Rows) != queryRawMaxRows || !out.Truncated {
+		t.Fatalf("rows=%d truncated=%v", len(out.Rows), out.Truncated)
 	}
 }
 

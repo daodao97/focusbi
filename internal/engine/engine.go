@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"xproxy/conf"
+	"xproxy/internal/runtimecfg"
 
 	"github.com/spf13/cast"
 )
@@ -35,11 +35,20 @@ type RunTraceFunc func(RunTraceEvent)
 // Runner 执行报表模板。defaultDSN 为报表配置的默认数据源。
 type Runner struct {
 	defaultDSN string
-	noCache    bool // 旁路查询缓存 (前端传 _nocache 时置位)
+	noCache    bool   // 旁路查询缓存 (前端传 _nocache 时置位)
+	cacheScope string // 脚本 KV 缓存作用域; 持久化报表使用 report:<id>
 	// authz 在执行触达某数据源前校验调用者权限 (按实际 dsn 名)。
 	// nil 表示不校验 (公开分享 / 定时任务等已预授权的入口)。
 	authz func(dsn string) error
 	trace RunTraceFunc
+}
+
+// WithCacheScope 返回一个带脚本缓存作用域的 Runner 副本。
+// 空作用域会禁用脚本 KV 缓存, 避免临时预览跨模板共享数据。
+func (r *Runner) WithCacheScope(scope string) *Runner {
+	cp := *r
+	cp.cacheScope = scope
+	return &cp
 }
 
 func NewRunner(defaultDSN string) *Runner {
@@ -175,7 +184,7 @@ func (r *Runner) Run(content string, params map[string]string) (ret *Result, err
 			if params == nil {
 				params = map[string]string{} // setParam 需可写
 			}
-			ctx := scriptContext{defaultDSN: r.defaultDSN, params: params, authz: r.authz, noCache: r.noCache}
+			ctx := scriptContext{defaultDSN: r.defaultDSN, params: params, authz: r.authz, noCache: r.noCache, cacheScope: r.cacheScope}
 			runScript(stripMarker(rb.body), ctx) // 只为副作用 (setParam); 忽略产出
 		}
 	}
@@ -222,7 +231,7 @@ func (r *Runner) Run(content string, params map[string]string) (ret *Result, err
 			}
 			flush()
 			started := time.Now()
-			ctx := scriptContext{defaultDSN: r.defaultDSN, params: params, authz: r.authz, blocks: blockRefs, noCache: r.noCache}
+			ctx := scriptContext{defaultDSN: r.defaultDSN, params: params, authz: r.authz, blocks: blockRefs, noCache: r.noCache, cacheScope: r.cacheScope}
 			scriptBlocks, scriptFilters, scriptErr := runScript(stripMarker(rb.body), ctx)
 			errStr := ""
 			if scriptErr != nil {
@@ -396,7 +405,7 @@ func (r *Runner) prefetchSQL(parsed []*rawBlock, macros map[string]string) []*sq
 		return out
 	}
 
-	n := conf.Get().QueryConcurrency()
+	n := runtimecfg.QueryConcurrency()
 	if n > len(jobs) {
 		n = len(jobs)
 	}

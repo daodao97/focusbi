@@ -42,22 +42,37 @@ func TestQueryTimeoutDuration(t *testing.T) {
 	}
 }
 
+func TestRuntimeSettingDefaults(t *testing.T) {
+	if got := (*Conf)(nil).ScriptTimeoutDuration(); got != 3*time.Minute {
+		t.Fatalf("nil script timeout = %v", got)
+	}
+	if got := (&Conf{Engine: EngineConf{ScriptTimeout: "20s"}}).ScriptTimeoutDuration(); got != 20*time.Second {
+		t.Fatalf("script timeout = %v", got)
+	}
+	if !(*Conf)(nil).ScheduleEnabled() || !(&Conf{}).PublicShareEnabled() {
+		t.Fatal("未配置的功能开关应默认开启")
+	}
+	disabled := false
+	c := &Conf{
+		Schedule: ScheduleConf{Enabled: &disabled},
+		Security: SecurityConf{PublicShareEnabled: &disabled},
+	}
+	if c.ScheduleEnabled() || c.PublicShareEnabled() {
+		t.Fatal("显式关闭的功能开关未生效")
+	}
+}
+
 func TestScriptFetchAllowed(t *testing.T) {
 	mk := func(mode string) *Conf { return &Conf{Engine: EngineConf{ScriptFetch: mode}} }
 
-	// 默认 / on: 放行
-	for _, mode := range []string{"", "on", "ON", " on "} {
-		if mk(mode).ScriptFetchAllowed("http://169.254.169.254/meta") != nil {
-			t.Errorf("mode=%q 应放行", mode)
+	// 默认关闭; on 仅在 URL 结构合法时通过配置层校验 (私网由网络层拒绝)。
+	for _, mode := range []string{"", "off", "OFF", " off "} {
+		if mk(mode).ScriptFetchAllowed("https://api.example.com/x") == nil {
+			t.Errorf("mode=%q 应拒绝", mode)
 		}
 	}
-	// nil conf 放行 (单测等无配置场景)
-	if (*Conf)(nil).ScriptFetchAllowed("http://x") != nil {
-		t.Error("nil conf 应放行")
-	}
-	// off: 全拒
-	if mk("off").ScriptFetchAllowed("https://api.example.com/x") == nil {
-		t.Error("off 应拒绝所有外呼")
+	if mk("on").ScriptFetchAllowed("https://api.example.com/x") != nil {
+		t.Error("on 应允许合法公网 URL")
 	}
 	// 白名单: 前缀命中放行, 未命中拒绝
 	wl := mk("https://api.example.com, https://open.feishu.cn")
@@ -73,12 +88,26 @@ func TestScriptFetchAllowed(t *testing.T) {
 	if wl.ScriptFetchAllowed("https://api.example.com.evil.com/x") == nil {
 		t.Error("前缀伪装域名应拒绝")
 	}
+	if wl.ScriptFetchAllowed("https://api.example.com:@evil.com/x") == nil {
+		t.Error("userinfo 伪装域名应拒绝")
+	}
+	pathWL := mk("https://api.example.com/v1")
+	if pathWL.ScriptFetchAllowed("https://api.example.com/v1/rate") != nil ||
+		pathWL.ScriptFetchAllowed("https://api.example.com/v10/rate") == nil {
+		t.Error("路径白名单应按段边界匹配")
+	}
+	if pathWL.ScriptFetchAllowed("https://api.example.com/v1/%2e%2e/admin") == nil {
+		t.Error("编码后的路径穿越不应绕过白名单")
+	}
 }
 
 func TestEnvOverridesNestedConfig(t *testing.T) {
 	t.Setenv("SITE_URL", "https://bi.example.com")
 	t.Setenv("SITE_JWT_SECRET", "env-secret")
 	t.Setenv("ENGINE_QUERY_TIMEOUT", "30s")
+	t.Setenv("ENGINE_SCRIPT_TIMEOUT", "20s")
+	t.Setenv("SCHEDULE_ENABLED", "false")
+	t.Setenv("SECURITY_PUBLIC_SHARE_ENABLED", "false")
 	t.Setenv("AI_PROVIDER", "claude")
 	t.Setenv("AI_BASE_URL", "https://api.example.com")
 	t.Setenv("TURNSTILE_SITE_KEY", "site-key")
@@ -103,6 +132,12 @@ func TestEnvOverridesNestedConfig(t *testing.T) {
 	}
 	if c.Engine.QueryTimeout != "30s" {
 		t.Fatalf("query timeout = %q", c.Engine.QueryTimeout)
+	}
+	if c.Engine.ScriptTimeout != "20s" {
+		t.Fatalf("script timeout = %q", c.Engine.ScriptTimeout)
+	}
+	if c.ScheduleEnabled() || c.PublicShareEnabled() {
+		t.Fatal("环境变量中的运行时开关未生效")
 	}
 	if c.AI.Provider != "claude" {
 		t.Fatalf("ai provider = %q", c.AI.Provider)

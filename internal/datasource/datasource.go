@@ -4,7 +4,9 @@ package datasource
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"strings"
@@ -13,6 +15,7 @@ import (
 
 	"xproxy/conf"
 	"xproxy/dao"
+	"xproxy/internal/runtimecfg"
 
 	"github.com/daodao97/xgo/xdb"
 
@@ -20,6 +23,21 @@ import (
 	_ "github.com/lib/pq"              // postgres
 	_ "modernc.org/sqlite"             // sqlite (纯 Go, 无需 CGO)
 )
+
+// CacheIdentity 返回数据源配置的不可逆指纹, 供上层结果缓存区分同名数据源的不同配置。
+// 配置改指向、删除后重建或 SSH 参数变化时, 指纹都会变化。
+func CacheIdentity(name string) (string, error) {
+	driver, dsn, rec, err := resolve(name)
+	if err != nil {
+		return "", err
+	}
+	sig := normalizeDriver(driver) + "\x00" + dsn
+	if rec != nil && rec.SSHEnabled {
+		sig += "\x00" + sshSignature(rec)
+	}
+	h := sha256.Sum256([]byte(sig))
+	return hex.EncodeToString(h[:]), nil
+}
 
 // normalizeDriver 把用户填写的驱动名归一化为 database/sql 注册的驱动名。
 //
@@ -254,7 +272,7 @@ func queryOnce(name, query string, args ...any) (*QueryResult, error) {
 
 func formatQueryError(err error) error {
 	if errors.Is(err, context.DeadlineExceeded) {
-		return fmt.Errorf("SQL 查询超时（超过 %s）", formatDurationCN(conf.Get().QueryTimeoutDuration()))
+		return fmt.Errorf("SQL 查询超时（超过 %s）", formatDurationCN(runtimecfg.QueryTimeout()))
 	}
 	return err
 }

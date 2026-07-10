@@ -79,3 +79,6 @@ curl -fsSL https://raw.githubusercontent.com/daodao97/focusbi/main/deploy/instal
 | `REDIS_ADDR` | 交互输入 | `external` 模式 Redis 地址 |
 | `FOCUSBI_FORCE` | 未设置 | 设为 `1` 时覆盖已生成文件 |
 | `FOCUSBI_ASSUME_YES` | 未设置 | 设为 `1` 时使用默认值进行无交互安装 |
+
+安装后，管理员可在后台「系统设置」动态覆盖 SQL 查询超时/并发数、脚本超时/网络访问、
+任务调度和公开分享开关。动态值保存在主库 `system_setting` 表，无需重新发布服务。

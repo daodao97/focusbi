@@ -317,11 +317,19 @@ curl -fsSL https://raw.githubusercontent.com/daodao97/focusbi/main/deploy/instal
 | `site.url` | 站点对外地址，用于定时任务里拼报表链接 |
 | `database` | 主库 (必须是 MySQL)，保存用户/报表/版本数据 |
 | `redis` | 缓存和分布式锁（多实例部署必需） |
-| `engine.query_timeout` | 单次 SQL 查询超时，默认 `3m` |
+| `engine.query_timeout` | 单次 SQL 查询超时，默认 `3m`；可动态覆盖 |
+| `engine.query_concurrency` | 单个报表的 SQL 区块并发数，默认 `8`；可动态覆盖 |
+| `engine.script_timeout` | 单个脚本区块执行超时，默认 `3m`；可动态覆盖 |
+| `engine.script_fetch` | 脚本 `fetch()` 的启动默认策略；运行中可在「系统设置」动态覆盖 |
+| `schedule.enabled` | 定时任务运行时开关；`ENABLE_CRON` 决定是否在启动时加载调度器 |
+| `security.public_share_enabled` | 是否允许创建和访问公开分享链接，默认开启 |
 | `ai` | AI provider (`claude`/`openai`) + `api_key` + `model` |
 | `turnstile` | Cloudflare Turnstile 登录人机验证 |
 
 启动时会读取当前目录 `.env`，再加载配置文件，最后用环境变量覆盖。
+管理员在「系统设置」保存的动态运行参数存于 `system_setting` 表，优先级高于配置文件，
+保存后无需重启；支持 SQL 查询超时/并发数、脚本超时/网络访问、任务调度和公开分享开关，
+多实例最多约 5 秒同步。
 
 ---
 

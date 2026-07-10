@@ -15,6 +15,20 @@ var forbiddenSQLTokens = map[string]bool{
 	"into": true, "outfile": true, "dumpfile": true, "load_file": true,
 }
 
+// PrepareReadOnlySQL 校验 SQL 为单条只读查询, 并用外层查询强制限制最大行数。
+// 外层 LIMIT 不受原查询自带的大 LIMIT/OFFSET 影响。limit<=0 时只做校验。
+// 供报表引擎之外的查询入口复用同一安全策略。
+func PrepareReadOnlySQL(sql string, limit int) (string, error) {
+	if err := validateReadOnlySQL(sql); err != nil {
+		return "", err
+	}
+	if limit <= 0 {
+		return sql, nil
+	}
+	body := strings.TrimRight(strings.TrimSpace(sql), "; \t\r\n")
+	return "SELECT * FROM (\n" + body + "\n) AS focusbi_readonly\nLIMIT " + itoa(limit), nil
+}
+
 // validateReadOnlySQL enforces the report SQL contract: a block/query may only
 // execute one SELECT/WITH statement. The tokenizer skips comments and quoted
 // strings so semicolons or keywords inside text literals do not trigger false

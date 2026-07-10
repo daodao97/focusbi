@@ -6,6 +6,7 @@ import (
 
 	"xproxy/conf"
 	"xproxy/internal/datasource"
+	"xproxy/internal/runtimecfg"
 
 	"github.com/daodao97/xgo/xdb"
 )
@@ -92,7 +93,11 @@ func runWithQueryConcurrency(t *testing.T, n int, content string) (*Result, erro
 	t.Helper()
 	old := conf.Get().Engine.QueryConcurrency
 	conf.Get().Engine.QueryConcurrency = n
-	defer func() { conf.Get().Engine.QueryConcurrency = old }()
+	runtimecfg.Invalidate()
+	defer func() {
+		conf.Get().Engine.QueryConcurrency = old
+		runtimecfg.Invalidate()
+	}()
 	return NewRunner("default").Run(content, nil)
 }
 

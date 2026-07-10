@@ -1,6 +1,7 @@
 package dao
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -35,7 +36,7 @@ func (r *ReportRecord) IsFolder() bool { return r.Type == "folder" }
 // ReportSettings 是 report.settings 的页面级配置 (JSON)。
 type ReportSettings struct {
 	AutoRefresh    int      `json:"auto_refresh"`            // 自动刷新间隔 (秒); 0 关闭
-	PrependContent string   `json:"prepend_content"`         // 页面顶部注入的原始 HTML (移植自 dataddy); 前端 v-html 渲染
+	PrependContent string   `json:"prepend_content"`         // 页面顶部富文本; 前端白名单清洗后渲染
 	ApprovedDSNs   []string `json:"approved_dsns,omitempty"` // 发布/分享/调度预授权的数据源白名单
 }
 
@@ -254,6 +255,17 @@ func DeleteReportByID(id int) error {
 	if Report == nil {
 		return fmt.Errorf("report model not initialized")
 	}
-	_, err := Report.Delete(xdb.WhereEq("id", id))
-	return err
+	if Schedule == nil || ReportVersion == nil {
+		return fmt.Errorf("report related models not initialized")
+	}
+	return Report.Transaction(func(tx *sql.Tx, txReport xdb.Model) error {
+		if _, err := Schedule.Tx(tx).Delete(xdb.WhereEq("report_id", id)); err != nil {
+			return err
+		}
+		if _, err := ReportVersion.Tx(tx).Delete(xdb.WhereEq("report_id", id)); err != nil {
+			return err
+		}
+		_, err := txReport.Delete(xdb.WhereEq("id", id))
+		return err
+	})
 }

@@ -1,5 +1,5 @@
 <script setup>
-import { ref, reactive, watch, onMounted } from 'vue'
+import { ref, reactive, watch, onMounted, computed } from 'vue'
 import { ElMessage } from 'element-plus'
 import { VideoPlay, VideoPause } from '@element-plus/icons-vue'
 import { api } from '@/api'
@@ -8,6 +8,7 @@ import { useAutoRefresh } from '@/autorefresh'
 import ReportFilters from '@/components/ReportFilters.vue'
 import ReportBlocks from '@/components/ReportBlocks.vue'
 import TimingTooltip from '@/components/TimingTooltip.vue'
+import { sanitizeReportHtml } from '@/sanitize'
 
 // 独立报表查看页 (公开分享, 类似 dataddy /open), 无需登录。
 // 形如 view.html#<share_token>?from_month=2026-06-01&to_month=2026-06-30
@@ -31,6 +32,7 @@ const result = ref(null)
 const params = ref(queryToParams(initialQuery))
 const loading = ref(false)
 const notFound = ref(false)
+const safePrependContent = computed(() => sanitizeReportHtml(result.value?.prepend_content))
 
 async function load() {
   if (!token) { notFound.value = true; return }
@@ -93,8 +95,8 @@ onMounted(load)
       <el-empty v-if="notFound" description="分享链接无效或已关闭" />
       <div v-else class="sheet" v-loading="loading">
         <ReportFilters v-model="params" :filters="result?.filters || []" :loading="loading" @run="run" />
-        <!-- 页面级顶部 HTML (report.settings.prepend_content); 由报表作者撰写, 直接渲染 -->
-        <div v-if="result?.prepend_content" class="prepend" v-html="result.prepend_content"></div>
+        <!-- 页面级顶部富文本经过白名单清洗后渲染。 -->
+        <div v-if="safePrependContent" class="prepend" v-html="safePrependContent"></div>
         <ReportBlocks v-if="result" :blocks="result.blocks" />
       </div>
     </main>

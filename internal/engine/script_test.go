@@ -1,10 +1,22 @@
 package engine
 
 import (
+	"net"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestScriptFetchIPBlocked(t *testing.T) {
+	for _, raw := range []string{"127.0.0.1", "10.0.0.1", "169.254.169.254", "::1", "fc00::1"} {
+		if !scriptFetchIPBlocked(net.ParseIP(raw)) {
+			t.Errorf("%s 应被判定为不可访问地址", raw)
+		}
+	}
+	if scriptFetchIPBlocked(net.ParseIP("8.8.8.8")) {
+		t.Fatal("公网地址不应被拒绝")
+	}
+}
 
 // ---- splitBlocks: 脚本含分号不被切碎 ----
 

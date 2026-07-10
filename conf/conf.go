@@ -2,7 +2,9 @@ package conf
 
 import (
 	"fmt"
+	"net/url"
 	"os"
+	"path"
 	"strings"
 	"time"
 
@@ -41,6 +43,16 @@ type SiteConf struct {
 	JWTSecret string `json:"jwt_secret" yaml:"jwt_secret" env:"JWT_SECRET"`
 }
 
+// ScheduleConf 配置定时任务运行时默认开关。ENABLE_CRON 仍决定是否启动调度器。
+type ScheduleConf struct {
+	Enabled *bool `json:"enabled" yaml:"enabled" env:"ENABLED"`
+}
+
+// SecurityConf 配置可在后台动态覆盖的安全功能默认值。
+type SecurityConf struct {
+	PublicShareEnabled *bool `json:"public_share_enabled" yaml:"public_share_enabled" env:"PUBLIC_SHARE_ENABLED"`
+}
+
 // EngineConf 是报表执行引擎配置。
 type EngineConf struct {
 	// QueryTimeout 单次数据源查询超时, Go duration 字符串, 如 "30s" / "3m"。
@@ -49,10 +61,12 @@ type EngineConf struct {
 	// QueryConcurrency 同一报表内独立 SQL 区块的并发查询数 (worker 池大小)。
 	// <=0 时回退默认值; 设为 1 即退回逐块串行执行。
 	QueryConcurrency int `json:"query_concurrency" yaml:"query_concurrency" env:"QUERY_CONCURRENCY"`
+	// ScriptTimeout 单个脚本区块的最大执行时间, Go duration 字符串。
+	ScriptTimeout string `json:"script_timeout" yaml:"script_timeout" env:"SCRIPT_TIMEOUT"`
 	// ScriptFetch 控制报表脚本里 fetch() 的外呼权限 (SSRF 面):
-	//   "" / "on"  -> 允许任意外呼 (兼容旧行为, 仅内网信任环境)
-	//   "off"      -> 禁用 fetch
-	//   其它       -> 逗号分隔的 URL 前缀白名单, 如 "https://api.example.com,https://open.feishu.cn"
+	//   "" / "off" -> 禁用 fetch (安全默认)
+	//   "on"        -> 允许公网 http/https, 网络层仍拒绝私网/环回地址
+	//   其它         -> 逗号分隔的 URL 白名单, 按协议/主机/端口/路径匹配
 	ScriptFetch string `json:"script_fetch" yaml:"script_fetch" env:"SCRIPT_FETCH"`
 }
 
@@ -63,6 +77,8 @@ type Conf struct {
 	Turnstile TurnstileConf    `json:"turnstile" yaml:"turnstile" envPrefix:"TURNSTILE_"`
 	Site      SiteConf         `json:"site" yaml:"site" envPrefix:"SITE_"`
 	Engine    EngineConf       `json:"engine" yaml:"engine" envPrefix:"ENGINE_"`
+	Schedule  ScheduleConf     `json:"schedule" yaml:"schedule" envPrefix:"SCHEDULE_"`
+	Security  SecurityConf     `json:"security" yaml:"security" envPrefix:"SECURITY_"`
 }
 
 // SiteBaseURL 返回站点地址 (去掉尾部斜杠), 仅从配置读取。
@@ -80,6 +96,7 @@ func (c *Conf) JWTSecretOrDefault() string {
 }
 
 const defaultQueryTimeout = 3 * time.Minute
+const defaultScriptTimeout = 3 * time.Minute
 
 // QueryTimeoutDuration 返回单次数据源查询超时。未配置/非法/非正数时回退到默认 3 分钟。
 func (c *Conf) QueryTimeoutDuration() time.Duration {
@@ -95,6 +112,28 @@ func (c *Conf) QueryTimeoutDuration() time.Duration {
 		return defaultQueryTimeout
 	}
 	return d
+}
+
+// ScriptTimeoutDuration 返回单个脚本区块的最大执行时间。未配置/非法时回退到默认 3 分钟。
+func (c *Conf) ScriptTimeoutDuration() time.Duration {
+	if c == nil {
+		return defaultScriptTimeout
+	}
+	d, err := time.ParseDuration(strings.TrimSpace(c.Engine.ScriptTimeout))
+	if err != nil || d <= 0 {
+		return defaultScriptTimeout
+	}
+	return d
+}
+
+// ScheduleEnabled 返回定时任务运行时默认开关。未配置时保持兼容, 默认开启。
+func (c *Conf) ScheduleEnabled() bool {
+	return c == nil || c.Schedule.Enabled == nil || *c.Schedule.Enabled
+}
+
+// PublicShareEnabled 返回公开链接分享的默认开关。未配置时保持兼容, 默认开启。
+func (c *Conf) PublicShareEnabled() bool {
+	return c == nil || c.Security.PublicShareEnabled == nil || *c.Security.PublicShareEnabled
 }
 
 const defaultQueryConcurrency = 8
@@ -113,25 +152,97 @@ func (c *Conf) ScriptFetchAllowed(url string) error {
 	if c != nil {
 		mode = strings.TrimSpace(c.Engine.ScriptFetch)
 	}
+	return ScriptFetchAllowed(mode, url)
+}
+
+// ScriptFetchAllowed 按给定运行模式校验目标 URL。
+func ScriptFetchAllowed(mode, rawURL string) error {
+	mode = strings.TrimSpace(mode)
 	switch strings.ToLower(mode) {
-	case "", "on":
-		return nil
-	case "off":
+	case "", "off":
 		return fmt.Errorf("脚本 fetch 已禁用 (engine.script_fetch=off)")
+	case "on":
+		return validateHTTPURL(rawURL)
 	}
-	for _, prefix := range strings.Split(mode, ",") {
-		prefix = strings.TrimSpace(prefix)
-		if prefix == "" || !strings.HasPrefix(url, prefix) {
+	target, err := urlpkg(rawURL)
+	if err != nil {
+		return err
+	}
+	for _, rawRule := range strings.Split(mode, ",") {
+		rule, err := urlpkg(strings.TrimSpace(rawRule))
+		if err != nil || !sameURLAuthority(rule, target) {
 			continue
 		}
-		// 前缀须止于边界, 防 "https://api.example.com" 放行 "https://api.example.com.evil.com"。
-		rest := url[len(prefix):]
-		if rest == "" || strings.HasSuffix(prefix, "/") ||
-			rest[0] == '/' || rest[0] == '?' || rest[0] == '#' || rest[0] == ':' {
+		rulePath := normalizedURLPath(rule)
+		targetPath := normalizedURLPath(target)
+		if rulePath == "" || targetPath == rulePath || strings.HasPrefix(targetPath, rulePath+"/") {
 			return nil
 		}
 	}
-	return fmt.Errorf("脚本 fetch 目标不在白名单内 (engine.script_fetch): %s", url)
+	return fmt.Errorf("脚本 fetch 目标不在白名单内 (engine.script_fetch): %s", rawURL)
+}
+
+func normalizedURLPath(u *url.URL) string {
+	p := path.Clean("/" + strings.TrimPrefix(u.Path, "/"))
+	if p == "/" || p == "." {
+		return ""
+	}
+	return strings.TrimSuffix(p, "/")
+}
+
+// ScriptFetchHostExplicitlyAllowed 判断某主机是否在显式白名单中。
+// 显式配置代表管理员有意允许该主机, 网络层据此决定是否允许私网地址。
+func (c *Conf) ScriptFetchHostExplicitlyAllowed(host string) bool {
+	if c == nil {
+		return false
+	}
+	return ScriptFetchHostExplicitlyAllowed(c.Engine.ScriptFetch, host)
+}
+
+func ScriptFetchHostExplicitlyAllowed(mode, host string) bool {
+	mode = strings.TrimSpace(mode)
+	if mode == "" || strings.EqualFold(mode, "off") || strings.EqualFold(mode, "on") {
+		return false
+	}
+	for _, rawRule := range strings.Split(mode, ",") {
+		rule, err := urlpkg(strings.TrimSpace(rawRule))
+		if err == nil && strings.EqualFold(rule.Hostname(), host) {
+			return true
+		}
+	}
+	return false
+}
+
+// ValidateScriptFetchMode 校验后台保存的模式是否合法。
+func ValidateScriptFetchMode(mode string) error {
+	mode = strings.TrimSpace(mode)
+	if mode == "" || strings.EqualFold(mode, "off") || strings.EqualFold(mode, "on") {
+		return nil
+	}
+	for _, rawRule := range strings.Split(mode, ",") {
+		if _, err := urlpkg(strings.TrimSpace(rawRule)); err != nil {
+			return fmt.Errorf("无效的 script_fetch 白名单 %q: %w", strings.TrimSpace(rawRule), err)
+		}
+	}
+	return nil
+}
+
+func validateHTTPURL(raw string) error {
+	_, err := urlpkg(raw)
+	return err
+}
+
+func urlpkg(raw string) (*url.URL, error) {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || u.Hostname() == "" || (u.Scheme != "http" && u.Scheme != "https") || u.User != nil {
+		return nil, fmt.Errorf("脚本 fetch 仅允许无凭据的 http/https URL")
+	}
+	return u, nil
+}
+
+func sameURLAuthority(a, b *url.URL) bool {
+	return strings.EqualFold(a.Scheme, b.Scheme) &&
+		strings.EqualFold(a.Hostname(), b.Hostname()) && a.Port() == b.Port()
 }
 
 var ConfInstance *Conf

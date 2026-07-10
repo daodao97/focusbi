@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"xproxy/dao"
+	"xproxy/internal/runtimecfg"
 
 	"github.com/daodao97/xgo/xlog"
 	"github.com/robfig/cron/v3"
@@ -19,6 +20,9 @@ var cronParser = cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month 
 // Tick 每分钟调度一次: 扫描所有启用定时任务, 到期的执行并推送。
 // 由 job 注册到 xcron (每分钟触发, 带分布式锁)。
 func Tick() {
+	if !runtimecfg.ScheduleEnabled() {
+		return
+	}
 	minute := nowFunc().Truncate(time.Minute)
 	subs, err := dao.ListEnabledSchedules()
 	if err != nil {

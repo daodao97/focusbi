@@ -7,6 +7,7 @@ import { ref, reactive, watch, onMounted, computed } from 'vue'
 import { ElMessage } from 'element-plus'
 import { api } from '@/api'
 import { canReadDsnById } from '@/perm'
+import { sanitizeReportHtml } from '@/sanitize'
 import AiChat from '@/components/AiChat.vue'
 import SqlEditor from '@/components/SqlEditor.vue'
 import ReportFilters from '@/components/ReportFilters.vue'
@@ -42,6 +43,7 @@ const settingsOpen = ref(false)     // 报表设置模态框
 const settingsTab = ref('general')  // 设置弹窗当前 Tab
 const autoRefresh = ref(0)          // 报表级自动刷新间隔 (秒); 0 关闭。存于 report.settings
 const prependContent = ref('')      // 页面顶部注入的原始 HTML; 存于 report.settings
+const safePrependContent = computed(() => sanitizeReportHtml(prependContent.value))
 const publishedContent = ref('')    // 已发布版 content (用于判断草稿是否有未发布改动)
 const savedSnapshot = ref('')       // 上次保存的可保存状态快照 (判断草稿是否有未保存改动)
 const publishing = ref(false)
@@ -284,8 +286,8 @@ defineExpose({ save, reload: load })
     <!-- 预览模式 -->
     <div v-if="mode === 'preview' && !loading" class="sheet" v-loading="previewing">
       <ReportFilters v-model="params" :filters="preview?.filters || []" :loading="previewing" @run="rerun" />
-      <!-- 页面级顶部 HTML 预览 (取编辑器当前值, 预览接口不回传 settings) -->
-      <div v-if="prependContent.trim()" class="prepend" v-html="prependContent"></div>
+      <!-- 页面级顶部富文本预览 (取编辑器当前值, 预览接口不回传 settings) -->
+      <div v-if="safePrependContent" class="prepend" v-html="safePrependContent"></div>
       <ReportBlocks v-if="preview" :blocks="preview.blocks" />
     </div>
 
@@ -303,7 +305,7 @@ defineExpose({ save, reload: load })
             <el-form-item label="顶部 HTML">
               <el-input v-model="prependContent" type="textarea" :rows="4"
                 placeholder="<div class='alert'>说明文字</div>" />
-              <div class="form-hint">在报表顶部注入一段原始 HTML (说明/提示/链接), 直接渲染。留空关闭。</div>
+              <div class="form-hint">在报表顶部展示说明、提示或链接；危险标签和属性会自动移除。留空关闭。</div>
             </el-form-item>
           </el-form>
         </el-tab-pane>

@@ -9,11 +9,21 @@ redis:
 
 # 报表执行引擎配置。
 # query_timeout 单次 SQL 查询超时, 支持 Go duration, 如 "30s" / "3m"。
-# script_fetch 脚本 fetch() 外呼权限: 空/"on" 任意外呼; "off" 禁用;
-#   或逗号分隔的 URL 前缀白名单, 如 "https://api.example.com,https://open.feishu.cn"。
+# query_concurrency 同一报表内独立 SQL 区块的最大并发数。
+# script_timeout 单个脚本区块的最大执行时间。
+# script_fetch 脚本 fetch() 外呼权限: 空/"off" 禁用; "on" 允许公网 http/https;
+#   或逗号分隔的 URL 白名单, 如 "https://api.example.com,https://open.feishu.cn"。
 engine:
   query_timeout: "3m"
-  script_fetch: ""
+  query_concurrency: 8
+  script_timeout: "3m"
+  script_fetch: "off"
+
+# 动态开关的启动默认值。后台「系统设置」可在运行中覆盖。
+schedule:
+  enabled: true
+security:
+  public_share_enabled: true
 
 # AI 对话式修改报表。留空则 /api/report/ai 返回“未配置”。
 # provider: claude (Anthropic Messages API, 默认/优先) 或 openai (Chat Completions)。

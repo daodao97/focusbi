@@ -78,7 +78,7 @@ type Result struct {
 	AutoRefresh int         `json:"auto_refresh,omitempty"` // 报表级自动刷新间隔 (秒); 来自 report.settings, 0 不刷新
 	// Messages 汇总各区块的波动/告警消息 (按区块顺序); 供定时任务直接读取。
 	Messages []string `json:"messages,omitempty"`
-	// PrependContent 页面顶部注入的原始 HTML (来自 report.settings); 前端 v-html 渲染。
+	// PrependContent 页面顶部富文本 (来自 report.settings); 前端白名单清洗后渲染。
 	PrependContent string        `json:"prepend_content,omitempty"`
 	Timing         *ReportTiming `json:"timing,omitempty"`
 }

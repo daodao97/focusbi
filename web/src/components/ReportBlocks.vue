@@ -4,6 +4,7 @@ import { ElMessage } from 'element-plus'
 import { InfoFilled } from '@element-plus/icons-vue'
 import { copyText } from '@/clipboard'
 import { fmtNumber } from '@/format'
+import { sanitizeReportHref } from '@/sanitize'
 import TimingTooltip from './TimingTooltip.vue'
 // ChartBlock(ECharts ~1MB) 与 SqlEditor(Monaco ~3MB) 体积大且仅按需出现,
 // 用异步组件拆分成独立 chunk: 无图表/不看 SQL 的页面不会加载它们。
@@ -48,7 +49,8 @@ async function copySql() {
 function cellHref(col, row) {
   const tpl = col.config && col.config.href
   if (!tpl) return ''
-  return String(tpl).replace(/\{(\w+)\}/g, (_, k) => encodeURIComponent(row[k] ?? ''))
+  const href = String(tpl).replace(/\{(\w+)\}/g, (_, k) => encodeURIComponent(row[k] ?? ''))
+  return sanitizeReportHref(href)
 }
 function cellTooltip(col) {
   return (col.config && col.config.tooltip) || ''
@@ -251,7 +253,8 @@ function summaryCell(b, type, col, idx) {
                 <el-tag v-if="cellTag(b, c, $index)" :type="cellTag(b, c, $index).type || 'info'"
                   :effect="cellTag(b, c, $index).plain ? 'plain' : 'light'" size="small"
                   :title="cellTooltip(c)">{{ cellTag(b, c, $index).text || cellText(c, row) }}</el-tag>
-                <a v-else-if="c.config && c.config.href" :href="cellHref(c, row)" target="_blank" class="cell-link"
+                <a v-else-if="c.config && cellHref(c, row)" :href="cellHref(c, row)" target="_blank"
+                  rel="noopener noreferrer" class="cell-link"
                   :title="cellTooltip(c)">{{ cellText(c, row) }}</a>
                 <span v-else :title="cellTooltip(c)">{{ cellText(c, row) }}</span>
               </template>

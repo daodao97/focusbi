@@ -7,7 +7,7 @@ import '@/theme.css'
 import '@/theme'
 import '@/styles.css'
 import App from './App.vue'
-import { getToken, setUnauthorizedHandler } from '@/api'
+import { hasSession, setUnauthorizedHandler } from '@/api'
 import { elementLocale } from '@/locale'
 
 const routes = [
@@ -21,7 +21,8 @@ const routes = [
   { path: '/tokens', name: 'tokens', component: () => import('./views/TokenList.vue') },
   { path: '/schedules', name: 'schedules', component: () => import('./views/ScheduleList.vue') },
   { path: '/users', name: 'users', component: () => import('./views/UserList.vue') },
-  { path: '/roles', name: 'roles', component: () => import('./views/RoleList.vue') }
+  { path: '/roles', name: 'roles', component: () => import('./views/RoleList.vue') },
+  { path: '/settings', name: 'settings', component: () => import('./views/SystemSettings.vue') }
 ]
 
 const router = createRouter({ history: createWebHashHistory(), routes })
@@ -29,7 +30,7 @@ const router = createRouter({ history: createWebHashHistory(), routes })
 // 路由守卫: 未登录跳登录页
 router.beforeEach((to) => {
   if (to.meta.public) return true
-  if (!getToken()) return { name: 'login', query: { redirect: to.fullPath } }
+  if (!hasSession()) return { name: 'login', query: { redirect: to.fullPath } }
   return true
 })
 

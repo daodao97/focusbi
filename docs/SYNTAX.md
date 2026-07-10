@@ -140,7 +140,7 @@ raw 区块 (原样输出, 适合展示纯文本/已转义内容)：
 - **自动刷新**: 是**报表级**设置 (不是块注解), 在报表编辑器里配置"自动刷新间隔(秒)",
   存于 `report.settings`。加载后每隔 N 秒静默重查 (旁路缓存), 适合监控大屏。
 - **顶部 HTML**: 同为**报表级**设置 (`report.settings.prepend_content`), 在报表编辑器
-  "报表设置 → 顶部 HTML" 里填一段原始 HTML, 渲染在所有区块之上 (说明/提示/链接)。
+  "报表设置 → 顶部 HTML" 里填写说明/提示/链接。内容会经过 HTML 白名单清洗后渲染在所有区块之上。
 
 ### 处理顺序
 
@@ -404,7 +404,7 @@ FROM orders;
 | `date` | 日期/时间字符串重排格式 (PHP 风格) | `{"date":"Y-m-d"}` |
 | `time2str` | Unix 时间戳 (秒) 转日期字符串 | `{"time2str":"Y-m-d H:i:s"}` |
 | `percent` | 条件百分比 (值/base×100, 按阈值变色) | `{"percent":{"base":"total","succ":70,"warn":40}}` |
-| `href` | 单元格渲染为链接, `{字段}` 取本行值 | `{"href":"/#/d?c={channel}"}` |
+| `href` | 单元格渲染为链接, `{字段}` 取本行值; 仅允许相对地址及 http/https/mailto/tel | `{"href":"/#/d?c={channel}"}` |
 | `tag` | 单元格按值渲染为彩色标签 (el-tag) | `{"tag":"1:success:已完成,0:danger:失败"}` |
 
 ### 单元格标签 `tag`
@@ -803,7 +803,7 @@ result.table({ title: '合计 ' + stats.total, rows: stats.rows })
 ```
 
 - 值须可 JSON 序列化 (对象/数组/标量); 函数等不可序列化的值静默不缓存。
-- **键是全局命名空间** (跨报表共享), 建议自带前缀 (如 `'sales:'`) 避免撞键。
+- 键自动按报表隔离, 同名键不会跨报表读写; 临时模板预览不使用共享脚本缓存。
 - 进程内缓存, 重启即失; 查看者强制刷新 (`nocache`) 时 `get` 强制未命中, `set` 照常写入新值。
 - 上限: 500 个键 / 单值序列化后 1MB, 超限静默不缓存。
 
@@ -933,7 +933,10 @@ else { result.table({ rows: r2.json().data }) }
 
 - 返回对象: `{ status, body, json() }` —— `status` 是 HTTP 状态码, `body` 是原始文本, `json()` 解析为对象。
 - `opts`: `{ method, headers, body }`, 省略则为 GET。单请求超时 30 秒, 响应体上限 4MB。
-- ⚠️ `fetch` 默认可访问任意地址 (SSRF 面), **仅限内网信任环境** (见文末安全前提)。管理员可通过配置 `engine.script_fetch` 收紧: `off` 禁用, 或逗号分隔的 URL 前缀白名单 (如 `https://api.example.com,https://open.feishu.cn`)。
+- `fetch` 默认关闭。管理员可在后台「系统设置」动态选择禁用、仅公网或 URL 白名单；
+  YAML 的 `engine.script_fetch` 是数据库未设置时的启动默认值。白名单按协议、主机、端口和路径匹配，重定向会再次校验。
+- 整个脚本区块的执行超时由后台「系统设置」中的脚本执行超时控制，YAML 默认项为
+  `engine.script_timeout`。
 
 ### 调试技巧
 
@@ -1069,5 +1072,5 @@ result.table({
 
 ### ⚠️ 安全前提
 
-脚本 = **在服务器上执行任意 JS**, 仅对报表有写权限 (`report*:w`) 者可写, **务必只在内网信任环境部署**。
-其中 `fetch()` 可访问任意地址 (SSRF 面), 同样仅限信任环境使用。
+脚本 = **在服务器上执行 JS**, 仅对报表有写权限 (`report*:w`) 者可写。`query()` 受数据源 RBAC 约束，
+`fetch()` 默认关闭；启用时仍应按最小范围配置 URL 白名单。
