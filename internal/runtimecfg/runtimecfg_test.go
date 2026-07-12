@@ -34,6 +34,7 @@ func TestRuntimeSettingsFallBackToConfig(t *testing.T) {
 	disabled := false
 	conf.ConfInstance = &conf.Conf{
 		Engine: conf.EngineConf{
+			ReportTimeout:    "8m",
 			QueryTimeout:     "45s",
 			QueryConcurrency: 3,
 			ScriptTimeout:    "12s",
@@ -51,6 +52,9 @@ func TestRuntimeSettingsFallBackToConfig(t *testing.T) {
 	if got := QueryTimeout(); got != 45*time.Second {
 		t.Fatalf("query timeout = %v", got)
 	}
+	if got := ReportTimeout(); got != 8*time.Minute {
+		t.Fatalf("report timeout = %v", got)
+	}
 	if got := QueryConcurrency(); got != 3 {
 		t.Fatalf("query concurrency = %d", got)
 	}
@@ -62,12 +66,12 @@ func TestRuntimeSettingsFallBackToConfig(t *testing.T) {
 	}
 
 	values, sources := Snapshot()
-	if values[QueryTimeoutKey] != "45s" || values[ScriptTimeoutKey] != "12s" ||
+	if values[ReportTimeoutKey] != "8m0s" || values[QueryTimeoutKey] != "45s" || values[ScriptTimeoutKey] != "12s" ||
 		values[QueryConcurrencyKey] != "3" || values[ScheduleEnabledKey] != "false" ||
 		values[PublicShareEnabledKey] != "false" {
 		t.Fatalf("snapshot values = %#v", values)
 	}
-	for _, key := range []string{QueryTimeoutKey, QueryConcurrencyKey, ScriptTimeoutKey, ScheduleEnabledKey, PublicShareEnabledKey} {
+	for _, key := range []string{ReportTimeoutKey, QueryTimeoutKey, QueryConcurrencyKey, ScriptTimeoutKey, ScheduleEnabledKey, PublicShareEnabledKey} {
 		if sources[key] != "config" {
 			t.Fatalf("%s source = %q", key, sources[key])
 		}
@@ -102,6 +106,7 @@ func TestValidateDynamicSettings(t *testing.T) {
 		ok    bool
 	}{
 		{QueryTimeoutKey, "90s", "1m30s", true},
+		{ReportTimeoutKey, "10m", "10m0s", true},
 		{QueryTimeoutKey, "500ms", "", false},
 		{ScriptTimeoutKey, "31m", "", false},
 		{QueryConcurrencyKey, "64", "64", true},

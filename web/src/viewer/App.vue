@@ -31,6 +31,7 @@ const report = reactive({ name: '' })
 const result = ref(null)
 const params = ref(queryToParams(initialQuery))
 const loading = ref(false)
+let runController
 const notFound = ref(false)
 const safePrependContent = computed(() => sanitizeReportHtml(result.value?.prepend_content))
 
@@ -46,20 +47,23 @@ async function load() {
   run()
 }
 
-// 自动刷新倒计时: 报表设置了间隔时, 倒计时归零自动重查 (旁路缓存), 可手动暂停。
-const autoRefresh = useAutoRefresh(() => run(true))
+// 自动刷新倒计时: 报表设置了间隔时, 倒计时归零自动重查, 可手动暂停。
+const autoRefresh = useAutoRefresh(() => run())
 
-async function run(force = false) {
+async function run() {
+	if (runController) runController.abort()
+	const controller = new AbortController()
+	runController = controller
   loading.value = true
   try {
-    // force=true (点击"刷新") 旁路查询缓存; 不污染同步到 hash 的 params。
-    const p = force === true ? { ...params.value, _nocache: '1' } : params.value
-    result.value = await api.publicRunReport(token, p)
+    // 公开分享刷新只重新执行报表, 不允许绕过服务端查询缓存。
+	result.value = await api.publicRunReport(token, params.value, controller.signal)
     autoRefresh.arm(result.value?.auto_refresh)
-  } catch (e) {
+	} catch (e) {
+	if (e.name === 'AbortError') return
     ElMessage.error(e.message)
   } finally {
-    loading.value = false
+	if (runController === controller) loading.value = false
   }
 }
 
@@ -84,7 +88,7 @@ onMounted(load)
         <h1>{{ report.name }}</h1>
         <TimingTooltip :timing="result?.timing" scope="report" />
       </div>
-      <el-button v-if="token" :loading="loading" size="small" @click="run(true)">刷新</el-button>
+      <el-button v-if="token" :loading="loading" size="small" @click="run()">刷新</el-button>
       <el-button v-if="autoRefresh.enabled.value" size="small" type="warning" plain
         :icon="autoRefresh.paused.value ? VideoPlay : VideoPause" @click="autoRefresh.toggle()">
         {{ autoRefresh.paused.value ? '已暂停' : `${autoRefresh.seconds.value} 秒后刷新` }}

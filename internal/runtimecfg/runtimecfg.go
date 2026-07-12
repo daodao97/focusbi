@@ -14,6 +14,7 @@ import (
 
 const (
 	ScriptFetchKey        = "engine.script_fetch"
+	ReportTimeoutKey      = "engine.report_timeout"
 	QueryTimeoutKey       = "engine.query_timeout"
 	QueryConcurrencyKey   = "engine.query_concurrency"
 	ScriptTimeoutKey      = "engine.script_timeout"
@@ -73,6 +74,19 @@ func QueryTimeout() time.Duration {
 	d, err := time.ParseDuration(value)
 	if err != nil || d <= 0 {
 		return 3 * time.Minute
+	}
+	return d
+}
+
+func ReportTimeout() time.Duration {
+	fallback := 10 * time.Minute
+	if c := config(); c != nil {
+		fallback = c.ReportTimeoutDuration()
+	}
+	value, _ := get(ReportTimeoutKey, fallback.String())
+	d, err := time.ParseDuration(value)
+	if err != nil || d <= 0 {
+		return 10 * time.Minute
 	}
 	return d
 }
@@ -140,11 +154,13 @@ func Snapshot() (map[string]string, map[string]string) {
 	fetch, fetchSource := ScriptFetch()
 	values[ScriptFetchKey], sources[ScriptFetchKey] = fetch, fetchSource
 	values[QueryTimeoutKey] = QueryTimeout().String()
+	values[ReportTimeoutKey] = ReportTimeout().String()
 	values[QueryConcurrencyKey] = strconv.Itoa(QueryConcurrency())
 	values[ScriptTimeoutKey] = ScriptTimeout().String()
 	values[ScheduleEnabledKey] = strconv.FormatBool(ScheduleEnabled())
 	values[PublicShareEnabledKey] = strconv.FormatBool(PublicShareEnabled())
 	readSource(QueryTimeoutKey)
+	readSource(ReportTimeoutKey)
 	readSource(QueryConcurrencyKey)
 	readSource(ScriptTimeoutKey)
 	readSource(ScheduleEnabledKey)
@@ -207,6 +223,11 @@ func normalizedDefault(key string) (string, error) {
 		if c != nil {
 			value = c.QueryTimeoutDuration().String()
 		}
+	case ReportTimeoutKey:
+		value = (10 * time.Minute).String()
+		if c != nil {
+			value = c.ReportTimeoutDuration().String()
+		}
 	case QueryConcurrencyKey:
 		value = "8"
 		if c != nil {
@@ -245,7 +266,7 @@ func validate(key, value string) (string, error) {
 		if err := conf.ValidateScriptFetchMode(value); err != nil {
 			return "", err
 		}
-	case QueryTimeoutKey, ScriptTimeoutKey:
+	case QueryTimeoutKey, ScriptTimeoutKey, ReportTimeoutKey:
 		d, err := time.ParseDuration(value)
 		if err != nil || d < time.Second || d > 30*time.Minute {
 			return "", fmt.Errorf("%s 必须在 1s 到 30m 之间", key)

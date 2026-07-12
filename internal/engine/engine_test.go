@@ -297,6 +297,8 @@ func TestInjectLimit(t *testing.T) {
 		{"SELECT * FROM t;", 500, "LIMIT 500"},
 		{"select * from t limit 10", 1000, ""},    // 已有 limit, 不加
 		{"SELECT * FROM t LIMIT 5, 10", 1000, ""}, // 带 offset 的 limit
+		{"SELECT * FROM t LIMIT 10 OFFSET 5", 1000, ""},
+		{"SELECT * FROM t LIMIT ALL", 1000, ""},
 		{"WITH x AS (SELECT 1) SELECT * FROM x", 100, "LIMIT 100"},
 		{"SHOW TABLES", 1000, ""}, // 非 select/with, 不加
 	}
@@ -316,6 +318,13 @@ func TestInjectLimit(t *testing.T) {
 	}
 }
 
+func TestEnforceHardLimit(t *testing.T) {
+	got := enforceHardLimit("SELECT 1 LIMIT 999999;", 100000)
+	if !strings.Contains(got, "SELECT 1 LIMIT 999999") || !strings.HasSuffix(got, "LIMIT 100000") {
+		t.Fatalf("硬上限应包裹原查询, got %q", got)
+	}
+}
+
 func TestValidateReadOnlySQL(t *testing.T) {
 	valid := []string{
 		"SELECT 1",
@@ -324,6 +333,9 @@ func TestValidateReadOnlySQL(t *testing.T) {
 		"/* comment */ SELECT * FROM t",
 		"SELECT amount AS `into` FROM t", // into 作反引号列别名: 引号内跳过分词, 不误伤
 		"SELECT 'INTO OUTFILE' AS note",  // 字符串字面量里的关键字不触发
+		"SELECT $$update; delete$$ AS note",
+		"SELECT $body$drop } table$body$ AS note",
+		"SELECT 1 # update users\n",
 	}
 	for _, sql := range valid {
 		if err := validateReadOnlySQL(sql); err != nil {
@@ -392,14 +404,14 @@ func TestResolveFilterOptionsReadOnly(t *testing.T) {
 
 	// 写操作 optionSQL -> 校验拦截, 选项留空。
 	bad := []FilterDef{{Name: "x", Type: "enum", optionSQL: "DELETE FROM pv"}}
-	r.resolveFilterOptions(bad)
+	r.resolveFilterOptions(bad, nil)
 	if len(bad[0].Options) != 0 {
 		t.Errorf("写操作 enum_sql 应被拒, 选项应为空, got %+v", bad[0].Options)
 	}
 
 	// 只读 optionSQL -> 正常填充。
 	good := []FilterDef{{Name: "d", Type: "enum", optionSQL: "SELECT day AS value, day AS label FROM pv ORDER BY day"}}
-	r.resolveFilterOptions(good)
+	r.resolveFilterOptions(good, nil)
 	if len(good[0].Options) == 0 {
 		t.Errorf("只读 enum_sql 应填充选项, got 空")
 	}
@@ -622,6 +634,102 @@ func TestValidate(t *testing.T) {
 	}
 	if _, issues := Validate("#!MARKDOWN\n# 标题\n#!END"); len(issues) != 0 {
 		t.Errorf("markdown 块不应报 SQL issue: %+v", issues)
+	}
+}
+
+func TestValidateStructureAndWarnings(t *testing.T) {
+	content := `
+-- @id=dup
+-- @limit=0
+SELECT 1 AS n;
+-- @id=dup
+SELECT '{unsafe[raw]}' AS n;
+#!SCRIPT
+dataset('missing')
+fetch('https://example.com')
+#!END`
+	_, issues := Validate(content)
+	var errors, warnings int
+	for _, issue := range issues {
+		switch issue.Severity {
+		case "error":
+			errors++
+		case "warning":
+			warnings++
+		}
+	}
+	if errors < 1 || warnings < 4 {
+		t.Fatalf("结构错误/风险提示不足: errors=%d warnings=%d issues=%+v", errors, warnings, issues)
+	}
+}
+
+func TestEnumSQLDependencies(t *testing.T) {
+	filters, _ := parseFilters(`${province|省份||enum(1:浙江)}
+${city|城市||enum_sql(SELECT id, name FROM city WHERE province='{province}')}`)
+	if len(filters) != 2 || len(filters[1].DependsOn) != 1 || filters[1].DependsOn[0] != "province" {
+		t.Fatalf("filters=%+v", filters)
+	}
+}
+
+func TestEnumSQLDependencyPrefersExactFilterName(t *testing.T) {
+	filters, _ := parseFilters(`${from_region|来源地区||string}
+${period|周期|-7 days,today|date_range}
+${a|A||enum_sql(SELECT 1 WHERE region='{from_region}')}
+${b|B||enum_sql(SELECT 1 WHERE day>='{from_period}')}`)
+	if len(filters) != 4 || len(filters[2].DependsOn) != 1 || filters[2].DependsOn[0] != "from_region" {
+		t.Fatalf("真实 from_ 名称被错误剥离: %+v", filters)
+	}
+	if len(filters[3].DependsOn) != 1 || filters[3].DependsOn[0] != "period" {
+		t.Fatalf("日期范围派生宏未映射到父过滤器: %+v", filters)
+	}
+}
+
+func TestFilterParserAllowsLiteralBracesInsideEnumSQL(t *testing.T) {
+	filters, _ := parseFilters(`${kind|类型||enum_sql(SELECT '{' AS value, '}' AS label UNION ALL SELECT '{parent}', 'x')}`)
+	if len(filters) != 1 || filters[0].optionSQL == "" {
+		t.Fatalf("带字面花括号的 enum_sql 解析失败: %+v", filters)
+	}
+}
+
+func TestFilterParserIgnoresSQLComments(t *testing.T) {
+	content := `${user|用户||enum_sql(
+SELECT id, name -- user's } {ignored} option
+FROM users /* admin's } option */
+WHERE org_id = '{org}'
+)}`
+	filters, cleaned := parseFilters(content)
+	if len(filters) != 1 || filters[0].optionSQL == "" || strings.TrimSpace(cleaned) != "" {
+		t.Fatalf("带 SQL 注释的 enum_sql 解析失败: filters=%+v cleaned=%q", filters, cleaned)
+	}
+}
+
+func TestFilterParserSupportsOrdinaryApostrophes(t *testing.T) {
+	filters, cleaned := parseFilters(`${author|User's name|O'Reilly|string}
+${book|Book||enum(1:O'Reilly,2:D'Angelo)}`)
+	if len(filters) != 2 || filters[0].Label != "User's name" || filters[0].Default != "O'Reilly" ||
+		len(filters[1].Options) != 2 || strings.TrimSpace(cleaned) != "" {
+		t.Fatalf("普通过滤器中的撇号解析失败: filters=%+v cleaned=%q", filters, cleaned)
+	}
+}
+
+func TestFilterParserSupportsDialectQuotesAndComments(t *testing.T) {
+	content := `${kind|类型||enum_sql(
+SELECT $$ } update $$ AS value, $label$ user's } $label$ AS label
+# ignored user's } {fake}
+WHERE org_id = '{org}'
+)}`
+	filters, cleaned := parseFilters(content)
+	if len(filters) != 1 || filters[0].optionSQL == "" || strings.TrimSpace(cleaned) != "" {
+		t.Fatalf("方言 SQL 引号/注释解析失败: filters=%+v cleaned=%q", filters, cleaned)
+	}
+}
+
+func TestFilterDependenciesIgnoreComments(t *testing.T) {
+	filters, _ := parseFilters(`${org|组织||enum(1:A)}
+${city|城市||enum_sql(SELECT 1 -- {org}
+)}`)
+	if len(filters) != 2 || len(filters[1].DependsOn) != 0 {
+		t.Fatalf("注释中的宏不应形成级联依赖: %+v", filters)
 	}
 }
 

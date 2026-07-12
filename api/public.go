@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 	"xproxy/internal/runtimecfg"
 
 	"github.com/daodao97/xgo/xdb"
+	"github.com/daodao97/xgo/xlog"
 	"github.com/gin-gonic/gin"
 )
 
@@ -57,11 +59,28 @@ func publicRunReport(c *gin.Context) {
 		fail(c, http.StatusForbidden, "分享报表未完成数据源预授权, 请重新开启分享")
 		return
 	}
+	// 限流租约与执行 deadline 使用同一份动态配置快照, 避免设置变更造成租约先于报表到期。
+	reportTimeout := runtimecfg.ReportTimeout()
+	reportCtx, cancel := context.WithTimeout(c.Request.Context(), reportTimeout)
+	defer cancel()
+	release, acquired, err := acquirePublicRun(reportCtx, r.ShareToken, reportTimeout)
+	if err != nil {
+		xlog.Error("public report redis limit failed", xlog.Int("report_id", r.Id), xlog.String("err", err.Error()))
+		fail(c, http.StatusServiceUnavailable, "公开报表限流服务暂不可用, 请稍后重试")
+		return
+	}
+	if !acquired {
+		fail(c, http.StatusTooManyRequests, "公开报表访问繁忙, 请稍后重试")
+		return
+	}
+	defer release()
+
 	result, err := engine.NewRunner(r.DSN).
 		WithCacheScope("report:"+strconv.Itoa(r.Id)).
-		WithNoCache(noCacheParam(req.Params)).
+		// 公开访问始终服从报表缓存策略, 不允许通过 _nocache 强制刷新数据源。
+		WithNoCache(false).
 		WithAuthz(engine.AllowlistAuthz(settings.ApprovedDSNs)).
-		Run(r.Content, req.Params)
+		RunContext(reportCtx, r.Content, req.Params)
 	if err != nil {
 		fail(c, http.StatusInternalServerError, err.Error())
 		return

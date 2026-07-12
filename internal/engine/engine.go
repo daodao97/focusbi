@@ -1,14 +1,17 @@
 package engine
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"sync"
 	"time"
 
+	"xproxy/internal/datasource"
 	"xproxy/internal/runtimecfg"
 
 	"github.com/spf13/cast"
+	"golang.org/x/sync/singleflight"
 )
 
 // RunTraceEvent 是 Runner 执行过程中的可选观测事件。
@@ -34,9 +37,13 @@ type RunTraceFunc func(RunTraceEvent)
 
 // Runner 执行报表模板。defaultDSN 为报表配置的默认数据源。
 type Runner struct {
-	defaultDSN string
-	noCache    bool   // 旁路查询缓存 (前端传 _nocache 时置位)
-	cacheScope string // 脚本 KV 缓存作用域; 持久化报表使用 report:<id>
+	ctx          context.Context
+	queryGroup   *singleflight.Group
+	queryMemo    *sync.Map
+	memoEligible *sync.Map
+	defaultDSN   string
+	noCache      bool   // 旁路查询缓存 (前端传 _nocache 时置位)
+	cacheScope   string // 脚本 KV 缓存作用域; 持久化报表使用 report:<id>
 	// authz 在执行触达某数据源前校验调用者权限 (按实际 dsn 名)。
 	// nil 表示不校验 (公开分享 / 定时任务等已预授权的入口)。
 	authz func(dsn string) error
@@ -55,7 +62,7 @@ func NewRunner(defaultDSN string) *Runner {
 	if defaultDSN == "" {
 		defaultDSN = "default"
 	}
-	return &Runner{defaultDSN: defaultDSN}
+	return &Runner{defaultDSN: defaultDSN, ctx: context.Background()}
 }
 
 // WithNoCache 返回一个旁路查询缓存的 Runner 副本 (用于强制刷新)。
@@ -84,6 +91,7 @@ func (r *Runner) WithTrace(fn RunTraceFunc) *Runner {
 type ValidationIssue struct {
 	BlockIndex int    `json:"block_index"` // 1-based 区块序号
 	BlockID    string `json:"block_id,omitempty"`
+	Severity   string `json:"severity"` // error / warning
 	Message    string `json:"message"`
 }
 
@@ -96,6 +104,14 @@ func Validate(content string) ([]FilterDef, []ValidationIssue) {
 	macros := macroValues(filters, nil) // 用默认值展开宏
 
 	var issues []ValidationIssue
+	knownIDs := map[string]bool{}
+	declared := map[string]bool{}
+	for _, f := range filters {
+		declared[f.Name] = true
+		declared["from_"+f.Name] = true
+		declared["to_"+f.Name] = true
+	}
+	hasSQLBase := false
 	idx := 0
 	for _, raw := range splitBlocks(cleaned) {
 		if strings.TrimSpace(raw) == "" {
@@ -103,26 +119,75 @@ func Validate(content string) ([]FilterDef, []ValidationIssue) {
 		}
 		idx++
 		rb := parseBlock(raw)
+		id := annotationString(rb, "id")
+		add := func(severity, message string) {
+			issues = append(issues, ValidationIssue{BlockIndex: idx, BlockID: id, Severity: severity, Message: message})
+		}
+		if id != "" {
+			if knownIDs[id] {
+				add("error", "区块 id 重复: "+id)
+			}
+			knownIDs[id] = true
+		}
+		if annotationInt(rb, "limit", -1) == 0 {
+			add("warning", "@limit=0 会取消默认限制, 但仍受系统硬上限约束")
+		}
+		if strings.Contains(rb.body, "[raw]") {
+			add("warning", "使用了未转义的 [raw] 宏, 请确认输入来源可信")
+		}
+		if rb.kind == "script" {
+			if strings.Contains(rb.body, "fetch(") {
+				add("warning", "脚本使用了 fetch(), 发布前请确认外部地址白名单")
+			}
+			for _, m := range datasetRefRe.FindAllStringSubmatch(rb.body, -1) {
+				if !knownIDs[m[1]] {
+					add("warning", "脚本引用了尚未声明 id 的区块: "+m[1])
+				}
+			}
+		}
 		if rb.kind != "sql" {
+			hasSQLBase = false
 			continue
+		}
+		if _, isMerge := parseJoinConfig(rb.annotations); isMerge && !hasSQLBase {
+			add("error", "@join/@union 前缺少可合并的 SQL 区块")
+		}
+		hasSQLBase = true
+		for _, m := range macroRe.FindAllStringSubmatch(rb.body, -1) {
+			name := strings.Split(m[2], ",")[0]
+			if name != "" && !declared[name] {
+				add("warning", "使用了未声明的宏: "+name)
+			}
 		}
 		sql := strings.TrimSpace(applyMacros(rb.body, macros))
 		if sql == "" {
 			continue // 行级条件宏可能把整块置空, 非错误
 		}
 		if err := validateReadOnlySQL(sql); err != nil {
-			issues = append(issues, ValidationIssue{
-				BlockIndex: idx,
-				BlockID:    annotationString(rb, "id"),
-				Message:    err.Error(),
-			})
+			add("error", err.Error())
 		}
 	}
 	return filters, issues
 }
 
 // Run 解析并执行报表, params 为用户提交的过滤器取值。
-func (r *Runner) Run(content string, params map[string]string) (ret *Result, err error) {
+func (r *Runner) Run(content string, params map[string]string) (*Result, error) {
+	return r.RunContext(context.Background(), content, params)
+}
+
+// RunContext 在报表总超时内执行。调用方取消请求时, 数据库查询也会随之取消。
+func (r *Runner) RunContext(parent context.Context, content string, params map[string]string) (*Result, error) {
+	ctx, cancel := context.WithTimeout(parent, runtimecfg.ReportTimeout())
+	defer cancel()
+	cp := *r
+	cp.ctx = ctx
+	cp.queryGroup = &singleflight.Group{}
+	cp.queryMemo = &sync.Map{}
+	cp.memoEligible = &sync.Map{}
+	return cp.run(content, params)
+}
+
+func (r *Runner) run(content string, params map[string]string) (ret *Result, err error) {
 	runStarted := time.Now()
 	parsedCount := 0
 	parseDurations := map[int]time.Duration{}
@@ -148,7 +213,7 @@ func (r *Runner) Run(content string, params map[string]string) (ret *Result, err
 
 	filters, cleaned := parseFilters(content)
 	resolveDefaults(filters)
-	r.resolveFilterOptions(filters) // enum_sql: 查库填充动态选项
+	r.resolveFilterOptions(filters, params) // enum_sql: 查库填充动态/级联选项
 
 	result := &Result{Filters: filters, Blocks: []Block{}}
 
@@ -184,7 +249,7 @@ func (r *Runner) Run(content string, params map[string]string) (ret *Result, err
 			if params == nil {
 				params = map[string]string{} // setParam 需可写
 			}
-			ctx := scriptContext{defaultDSN: r.defaultDSN, params: params, authz: r.authz, noCache: r.noCache, cacheScope: r.cacheScope}
+			ctx := scriptContext{ctx: r.ctx, defaultDSN: r.defaultDSN, params: params, authz: r.authz, noCache: r.noCache, cacheScope: r.cacheScope, query: r.scriptQuery}
 			runScript(stripMarker(rb.body), ctx) // 只为副作用 (setParam); 忽略产出
 		}
 	}
@@ -231,7 +296,7 @@ func (r *Runner) Run(content string, params map[string]string) (ret *Result, err
 			}
 			flush()
 			started := time.Now()
-			ctx := scriptContext{defaultDSN: r.defaultDSN, params: params, authz: r.authz, blocks: blockRefs, noCache: r.noCache, cacheScope: r.cacheScope}
+			ctx := scriptContext{ctx: r.ctx, defaultDSN: r.defaultDSN, params: params, authz: r.authz, blocks: blockRefs, noCache: r.noCache, cacheScope: r.cacheScope, query: r.scriptQuery}
 			scriptBlocks, scriptFilters, scriptErr := runScript(stripMarker(rb.body), ctx)
 			errStr := ""
 			if scriptErr != nil {
@@ -296,12 +361,12 @@ func (r *Runner) Run(content string, params map[string]string) (ret *Result, err
 			timing.TotalMS = timing.ParseMS + timing.ExecMS
 			// 带 @join/@union 且已有挂起基底 -> 并入基底, 不新开块。
 			if isMerge && pending != nil {
-				pending.merge(spec, sd.cols, sd.rows, sd.errStr, timing)
+				pending.merge(spec, sd.cols, sd.rows, sd.truncated, sd.rowLimit, sd.errStr, timing)
 				continue
 			}
 			// 否则定稿上一个基底, 自己成为新的挂起基底。
 			flush()
-			pending = newMergeGroup(rb, sd.cols, sd.rows, sd.flipped, sd.sql, sd.errStr, timing)
+			pending = newMergeGroup(rb, sd.cols, sd.rows, sd.flipped, sd.truncated, sd.rowLimit, sd.sql, sd.errStr, timing)
 		default:
 			continue
 		}
@@ -371,13 +436,19 @@ func mergeTiming(base, add *BlockTiming) *BlockTiming {
 
 // sqlData 是一个 SQL 区块预取阶段的产出 (runSQLData 的返回值打包)。
 type sqlData struct {
-	cols    []string
-	rows    []map[string]any
-	flipped bool
-	sql     string
-	errStr  string
-	timing  *BlockTiming
+	cols      []string
+	rows      []map[string]any
+	flipped   bool
+	sql       string
+	errStr    string
+	timing    *BlockTiming
+	truncated bool
+	rowLimit  int
 }
+
+// 请求内顺序复用只保留小结果; 大结果仍由 singleflight 合并并发查询, 避免 memo
+// 与区块数据同时长期持有两份大对象。
+const maxRunMemoRows = 5000
 
 // prefetchSQL 并发执行所有独立 SQL 区块的数据阶段, 返回与 parsed 等长的结果切片
 // (非 SQL 块、或宏替换后 body 为空的块对应 nil)。每个 goroutine 只写自己的下标, 无写竞争。
@@ -403,6 +474,21 @@ func (r *Runner) prefetchSQL(parsed []*rawBlock, macros map[string]string) []*sq
 	}
 	if len(jobs) == 0 {
 		return out
+	}
+	// 在执行前统计声明式 SQL 的最终查询键。确定重复的键即使结果很大也进入 memo,
+	// 从而在 query_concurrency=1 时仍只访问数据库一次；唯一大查询不额外占内存。
+	counts := map[string]int{}
+	for _, j := range jobs {
+		finalSQL, _, _ := prepareBlockSQL(j.rb, j.body)
+		key := runQueryKey(r.blockDSN(j.rb), finalSQL, annotationInt(j.rb, "sql_cache", 0))
+		counts[key]++
+	}
+	if r.memoEligible != nil {
+		for key, count := range counts {
+			if count > 1 {
+				r.memoEligible.Store(key, true)
+			}
+		}
 	}
 
 	n := runtimecfg.QueryConcurrency()
@@ -435,14 +521,14 @@ func (r *Runner) prefetchSQL(parsed []*rawBlock, macros map[string]string) []*sq
 				})
 			}
 		}()
-		cols, rows, flipped, sql, errStr := r.runSQLData(j.rb, j.body)
+		cols, rows, flipped, truncated, rowLimit, sql, errStr := r.runSQLData(j.rb, j.body)
 		timing := blockTiming(0, time.Since(started))
 		timing.DSN = dsn
 		timing.Rows = len(rows)
 		timing.Columns = len(cols)
 		timing.SQLLen = len(sql)
 		timing.Error = errStr
-		out[j.idx] = &sqlData{cols: cols, rows: rows, flipped: flipped, sql: sql, errStr: errStr, timing: timing}
+		out[j.idx] = &sqlData{cols: cols, rows: rows, flipped: flipped, truncated: truncated, rowLimit: rowLimit, sql: sql, errStr: errStr, timing: timing}
 		r.traceEvent(RunTraceEvent{
 			Phase:      "block_exec",
 			BlockIndex: j.idx + 1,
@@ -484,13 +570,12 @@ func (r *Runner) prefetchSQL(parsed []*rawBlock, macros map[string]string) []*sq
 // runSQLData 执行 SQL 区块的"数据阶段": 查询 + 数据管线 (filter/date_line/sort/series/flip),
 // 返回定型后的列、行、是否转置、最终 SQL 与错误串 (空表示无错)。
 // 展示阶段 (列配置/chart/sum/波动/notice) 留待合并完成后由 mergeGroup.finalize 处理。
-func (r *Runner) runSQLData(rb *rawBlock, sql string) (cols []string, rows []map[string]any, flipped bool, finalSQL string, errStr string) {
+func (r *Runner) runSQLData(rb *rawBlock, sql string) (cols []string, rows []map[string]any, flipped, truncated bool, rowLimit int, finalSQL string, errStr string) {
 	if err := validateReadOnlySQL(sql); err != nil {
-		return nil, nil, false, sql, err.Error()
+		return nil, nil, false, false, 0, sql, err.Error()
 	}
 
-	// 自动补 LIMIT (默认 1000), 防止误查全表。可用 -- @limit=N 覆盖, 0 表示不限制。
-	sql = injectLimit(sql, annotationInt(rb, "limit", 1000))
+	sql, templateLimit, detectTemplateTruncation := prepareBlockSQL(rb, sql)
 	finalSQL = sql
 
 	dsn := r.defaultDSN
@@ -501,17 +586,26 @@ func (r *Runner) runSQLData(rb *rawBlock, sql string) (cols []string, rows []map
 	// 数据源授权: 按实际触达的 dsn 校验 (@dsn= 覆盖也走这里)。无权则该块直接报错, 不查库。
 	if r.authz != nil {
 		if err := r.authz(dsn); err != nil {
-			return nil, nil, false, sql, err.Error()
+			return nil, nil, false, false, 0, sql, err.Error()
 		}
 	}
 
 	// 查询缓存: -- @sql_cache=秒数 (0 或缺省不缓存); 前端强制刷新时旁路。
-	qr, err := cachedQuery(dsn, sql, annotationInt(rb, "sql_cache", 0), r.noCache)
+	qr, err := r.query(dsn, sql, annotationInt(rb, "sql_cache", 0))
 	if err != nil {
-		return nil, nil, false, sql, err.Error()
+		return nil, nil, false, false, 0, sql, err.Error()
 	}
 
 	cols, rows = qr.Columns, qr.Rows
+	if detectTemplateTruncation && len(rows) > templateLimit {
+		rows = rows[:templateLimit]
+		truncated = true
+		rowLimit = templateLimit
+	} else if len(rows) > reportQueryHardLimit {
+		rows = rows[:reportQueryHardLimit]
+		truncated = true
+		rowLimit = reportQueryHardLimit
+	}
 
 	// 结果后置过滤: @filter=[["amount",">","100"]] (多条件 AND)
 	if conds := parseFilterConfig(rb.annotations["filter"]); conds != nil {
@@ -541,35 +635,97 @@ func (r *Runner) runSQLData(rb *rawBlock, sql string) (cols []string, rows []map
 		}
 	}
 
-	return cols, rows, flipped, sql, ""
+	return cols, rows, flipped, truncated, rowLimit, sql, ""
+}
+
+func prepareBlockSQL(rb *rawBlock, sql string) (finalSQL string, templateLimit int, detectTemplateTruncation bool) {
+	// 引擎自动限制查询 N+1 行, 用额外一行判断默认/注解 LIMIT 是否截断。
+	// SQL 自带 LIMIT 时尊重作者语义; 系统硬上限始终由外层查询兜底。
+	templateLimit = annotationInt(rb, "limit", 1000)
+	detectTemplateTruncation = templateLimit > 0 && !limitRe.MatchString(strings.TrimSpace(sql))
+	if detectTemplateTruncation {
+		sql = injectLimit(sql, templateLimit+1)
+	}
+	return enforceHardLimit(sql, reportQueryHardLimit+1), templateLimit, detectTemplateTruncation
+}
+
+// query 合并单次报表运行内完全相同的 DSN+SQL+参数查询。每个调用方拿到独立副本,
+// 后续排序、透视等变换不会互相污染。
+func (r *Runner) query(dsn, sql string, ttlSec int, args ...any) (*datasource.QueryResult, error) {
+	return r.queryWithMemo(dsn, sql, ttlSec, false, args...)
+}
+
+func (r *Runner) scriptQuery(dsn, sql string, ttlSec int, args ...any) (*datasource.QueryResult, error) {
+	return r.queryWithMemo(dsn, sql, ttlSec, true, args...)
+}
+
+func (r *Runner) queryWithMemo(dsn, sql string, ttlSec int, forceMemo bool, args ...any) (*datasource.QueryResult, error) {
+	if r.queryGroup == nil {
+		return cachedQueryContext(r.ctx, dsn, sql, ttlSec, r.noCache, args...)
+	}
+	key := runQueryKey(dsn, sql, ttlSec, args...)
+	if r.queryMemo != nil {
+		if memo, ok := r.queryMemo.Load(key); ok {
+			return cloneQueryResult(memo.(*datasource.QueryResult)), nil
+		}
+	}
+	v, err, _ := r.queryGroup.Do(key, func() (any, error) {
+		res, err := cachedQueryContext(r.ctx, dsn, sql, ttlSec, r.noCache, args...)
+		if err == nil && r.queryMemo != nil {
+			knownDuplicate := false
+			if r.memoEligible != nil {
+				_, knownDuplicate = r.memoEligible.Load(key)
+			}
+			if forceMemo || knownDuplicate || len(res.Rows) <= maxRunMemoRows {
+				r.queryMemo.Store(key, cloneQueryResult(res))
+			}
+		}
+		return res, err
+	})
+	if err != nil {
+		return nil, err
+	}
+	return cloneQueryResult(v.(*datasource.QueryResult)), nil
+}
+
+func runQueryKey(dsn, sql string, ttlSec int, args ...any) string {
+	return fmt.Sprintf("%s:ttl=%d", cacheKey(normalizedDSNName(dsn), sql, args...), ttlSec)
 }
 
 // mergeGroup 是一个 @join/@union 合并组的累积状态。
 // 基底块 (rb) 提供展示注解; 后续带 @join/@union 的块只贡献数据。
 type mergeGroup struct {
-	rb      *rawBlock
-	table   *arrayTable
-	flipped bool
-	sqls    []string
-	errStr  string
-	timing  *BlockTiming
+	rb        *rawBlock
+	table     *arrayTable
+	flipped   bool
+	sqls      []string
+	errStr    string
+	timing    *BlockTiming
+	truncated bool
+	rowLimit  int
 }
 
-func newMergeGroup(rb *rawBlock, cols []string, rows []map[string]any, flipped bool, sql, errStr string, timing *BlockTiming) *mergeGroup {
+func newMergeGroup(rb *rawBlock, cols []string, rows []map[string]any, flipped, truncated bool, rowLimit int, sql, errStr string, timing *BlockTiming) *mergeGroup {
 	return &mergeGroup{
-		rb:      rb,
-		table:   newArrayTable(cols, rows),
-		flipped: flipped,
-		sqls:    []string{sql},
-		errStr:  errStr,
-		timing:  cloneTiming(timing),
+		rb:        rb,
+		table:     newArrayTable(cols, rows),
+		flipped:   flipped,
+		sqls:      []string{sql},
+		errStr:    errStr,
+		timing:    cloneTiming(timing),
+		truncated: truncated,
+		rowLimit:  rowLimit,
 	}
 }
 
 // merge 把一个带 @join/@union 的块并入基底。
-func (g *mergeGroup) merge(spec joinSpec, cols []string, rows []map[string]any, errStr string, timing *BlockTiming) {
+func (g *mergeGroup) merge(spec joinSpec, cols []string, rows []map[string]any, truncated bool, rowLimit int, errStr string, timing *BlockTiming) {
 	g.sqls = append(g.sqls, "")
 	g.timing = mergeTiming(g.timing, timing)
+	g.truncated = g.truncated || truncated
+	if truncated && (g.rowLimit == 0 || rowLimit < g.rowLimit) {
+		g.rowLimit = rowLimit
+	}
 	if errStr != "" {
 		if g.errStr == "" {
 			g.errStr = errStr
@@ -596,6 +752,10 @@ func (g *mergeGroup) finalize() Block {
 		SQL:   strings.TrimSpace(strings.Join(g.sqls, ";\n")),
 	}
 	block.Timing = cloneTiming(g.timing)
+	block.Truncated = g.truncated
+	if g.truncated {
+		block.RowLimit = g.rowLimit
+	}
 	if g.errStr != "" {
 		block.Error = g.errStr
 		if block.Timing != nil && block.Timing.Error == "" {

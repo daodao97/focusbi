@@ -339,6 +339,12 @@ bearer_token_env_var = "FOCUSBI_TOKEN"
 实现: `internal/mcpserver/` (server/tools/auth), 接入 `api/mcp.go`; 令牌持久层
 `dao/api_token.go` + 迁移 `00007`; REST 管理 `api/api_token.go` (`/api/token`)。
 
+## 执行控制
+
+完整报表运行默认总超时为 10 分钟, 可在后台「系统设置」动态修改
+`engine.report_timeout`。客户端取消请求时, SQL、`enum_sql`、脚本查询和脚本 `fetch()` 会同步取消。
+同一次运行内完全相同的 DSN、SQL、参数和缓存策略只执行一次, 各区块获得独立结果副本后再做转换。
+
 ## 测试
 
 ```bash

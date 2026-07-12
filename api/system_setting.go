@@ -11,6 +11,7 @@ import (
 
 type systemSettingsReq struct {
 	ScriptFetch        *string `json:"script_fetch"`
+	ReportTimeout      *string `json:"report_timeout"`
 	QueryTimeout       *string `json:"query_timeout"`
 	QueryConcurrency   *int    `json:"query_concurrency"`
 	ScriptTimeout      *string `json:"script_timeout"`
@@ -34,6 +35,9 @@ func updateSystemSettings(c *gin.Context) {
 	}
 	if req.QueryTimeout != nil {
 		values[runtimecfg.QueryTimeoutKey] = *req.QueryTimeout
+	}
+	if req.ReportTimeout != nil {
+		values[runtimecfg.ReportTimeoutKey] = *req.ReportTimeout
 	}
 	if req.QueryConcurrency != nil {
 		values[runtimecfg.QueryConcurrencyKey] = strconv.Itoa(*req.QueryConcurrency)
@@ -66,6 +70,7 @@ func currentSystemSettings() gin.H {
 	return gin.H{
 		"script_fetch":         values[runtimecfg.ScriptFetchKey],
 		"query_timeout":        values[runtimecfg.QueryTimeoutKey],
+		"report_timeout":       values[runtimecfg.ReportTimeoutKey],
 		"query_concurrency":    queryConcurrency,
 		"script_timeout":       values[runtimecfg.ScriptTimeoutKey],
 		"schedule_enabled":     scheduleEnabled,

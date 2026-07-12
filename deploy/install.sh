@@ -195,6 +195,7 @@ redis:
     addr: $(yaml_dq "$redis_addr")
 
 engine:
+  report_timeout: "10m"
   query_timeout: $(yaml_dq "$query_timeout")
   query_concurrency: 8
   script_timeout: "3m"

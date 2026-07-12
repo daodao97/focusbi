@@ -17,7 +17,7 @@ func TestCurrentSystemSettingsUsesTypedConfigDefaults(t *testing.T) {
 	oldConf, oldModel := conf.ConfInstance, dao.SystemSetting
 	disabled := false
 	conf.ConfInstance = &conf.Conf{
-		Engine:   conf.EngineConf{QueryTimeout: "45s", QueryConcurrency: 2, ScriptTimeout: "20s"},
+		Engine:   conf.EngineConf{ReportTimeout: "8m", QueryTimeout: "45s", QueryConcurrency: 2, ScriptTimeout: "20s"},
 		Schedule: conf.ScheduleConf{Enabled: &disabled},
 		Security: conf.SecurityConf{PublicShareEnabled: &disabled},
 	}
@@ -29,7 +29,7 @@ func TestCurrentSystemSettingsUsesTypedConfigDefaults(t *testing.T) {
 	runtimecfg.Invalidate()
 
 	got := currentSystemSettings()
-	if got["query_timeout"] != "45s" || got["query_concurrency"] != 2 || got["script_timeout"] != "20s" {
+	if got["report_timeout"] != "8m0s" || got["query_timeout"] != "45s" || got["query_concurrency"] != 2 || got["script_timeout"] != "20s" {
 		t.Fatalf("engine settings = %#v", got)
 	}
 	if got["schedule_enabled"] != false || got["public_share_enabled"] != false {

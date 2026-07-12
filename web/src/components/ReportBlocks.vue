@@ -52,6 +52,21 @@ function cellHref(col, row) {
   const href = String(tpl).replace(/\{(\w+)\}/g, (_, k) => encodeURIComponent(row[k] ?? ''))
   return sanitizeReportHref(href)
 }
+
+// drilldown: {report: 25, params: {region: "{region}", day: "{day}"}}
+// 跳到目标报表并把当前行字段映射为过滤参数。
+function drillHref(col, row) {
+  const cfg = col.config && col.config.drilldown
+  const report = Number(cfg && cfg.report)
+  if (!report) return ''
+  const query = new URLSearchParams()
+  for (const [name, tpl] of Object.entries(cfg.params || {})) {
+    const value = String(tpl).replace(/\{(\w+)\}/g, (_, k) => row[k] ?? '')
+    if (value !== '') query.set(name, value)
+  }
+  const base = location.origin + location.pathname.replace(/[^/]*$/, '') + 'index.html'
+  return `${base}#/reports/${report}` + (query.size ? `?${query}` : '')
+}
 function cellTooltip(col) {
   return (col.config && col.config.tooltip) || ''
 }
@@ -67,7 +82,7 @@ function colHasTag(b, col) {
 }
 // 是否需要自定义单元格渲染 (链接 / 提示 / 标签 / 数字格式化)
 function colNeedsSlot(b, col) {
-  return colHasTag(b, col) || !!(col.config && (col.config.href || col.config.tooltip || col.config.format))
+  return colHasTag(b, col) || !!(col.config && (col.config.href || col.config.drilldown || col.config.tooltip || col.config.format))
 }
 
 // 单元格展示文本: 数值列按 config.format 格式化 (后端 rows 是原始数值, 格式化只在展示层)。
@@ -226,6 +241,8 @@ function summaryCell(b, type, col, idx) {
       </div>
 
       <el-alert v-if="b.error" type="error" :closable="false" :title="b.error" />
+	  <el-alert v-else-if="b.truncated" type="warning" :closable="false"
+	    :title="`结果超过 ${b.row_limit} 行，仅展示前 ${b.row_limit} 行`" class="notice" />
 
       <!-- markdown 区块: 渲染 markdown 语法 (标题/列表/表格/代码等) -->
       <Markdown v-else-if="b.type === 'markdown'" :content="b.markdown || ''"
@@ -253,6 +270,8 @@ function summaryCell(b, type, col, idx) {
                 <el-tag v-if="cellTag(b, c, $index)" :type="cellTag(b, c, $index).type || 'info'"
                   :effect="cellTag(b, c, $index).plain ? 'plain' : 'light'" size="small"
                   :title="cellTooltip(c)">{{ cellTag(b, c, $index).text || cellText(c, row) }}</el-tag>
+                <a v-else-if="drillHref(c, row)" :href="drillHref(c, row)" class="cell-link"
+                  :title="cellTooltip(c)">{{ cellText(c, row) }}</a>
                 <a v-else-if="c.config && cellHref(c, row)" :href="cellHref(c, row)" target="_blank"
                   rel="noopener noreferrer" class="cell-link"
                   :title="cellTooltip(c)">{{ cellText(c, row) }}</a>

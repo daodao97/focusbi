@@ -11,9 +11,10 @@ export function clearSession() { localStorage.removeItem(SESSION_KEY) }
 let onUnauthorized = null
 export function setUnauthorizedHandler(fn) { onUnauthorized = fn }
 
-async function request(method, url, body) {
+async function request(method, url, body, options = {}) {
   const headers = { 'Content-Type': 'application/json' }
   const opt = { method, headers, credentials: 'same-origin' }
+	if (options.signal) opt.signal = options.signal
   if (body !== undefined) opt.body = JSON.stringify(body)
   const res = await fetch(BASE + url, opt)
 
@@ -135,8 +136,8 @@ export const api = {
   reorderReports: (items) => request('POST', '/report/reorder', { items }),
 
   // 执行 / 预览 / AI
-  runReport: (id, params) => request('POST', `/report/${id}/run`, { params }),
-  previewReport: (payload) => request('POST', '/report/preview', payload),
+  runReport: (id, params, signal) => request('POST', `/report/${id}/run`, { params }, { signal }),
+  previewReport: (payload, signal) => request('POST', '/report/preview', payload, { signal }),
   aiModify: (content, instruction, schema, history = []) => request('POST', '/report/ai', { content, instruction, schema, history }),
   aiModifyStream: (content, instruction, schema, history = [], onEvent) =>
     streamRequest('POST', '/report/ai/stream', { content, instruction, schema, history }, onEvent),
@@ -163,5 +164,5 @@ export const api = {
 
   // 公开访问 (无需登录, 凭 share_token)
   publicGetReport: (token) => request('GET', `/public/report/${encodeURIComponent(token)}`),
-  publicRunReport: (token, params) => request('POST', `/public/report/${encodeURIComponent(token)}/run`, { params })
+  publicRunReport: (token, params, signal) => request('POST', `/public/report/${encodeURIComponent(token)}/run`, { params }, { signal })
 }

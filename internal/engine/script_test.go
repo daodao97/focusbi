@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"context"
 	"net"
 	"strings"
 	"testing"
@@ -461,6 +462,25 @@ func TestRunScriptDatasetMissingReturnsErrorBlock(t *testing.T) {
 	blocks, _, _ := runScript(`dataset('missing')`, scriptContext{blocks: map[string]Block{}})
 	if len(blocks) != 1 || !strings.Contains(blocks[0].Error, "dataset 未找到") {
 		t.Fatalf("missing dataset 应产生错误区块: %+v", blocks)
+	}
+}
+
+func TestRunScriptStopsOnContextCancel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan []Block, 1)
+	go func() {
+		blocks, _, _ := runScript(`while (true) {}`, scriptContext{ctx: ctx})
+		done <- blocks
+	}()
+	time.Sleep(10 * time.Millisecond)
+	cancel()
+	select {
+	case blocks := <-done:
+		if len(blocks) == 0 || blocks[len(blocks)-1].Error == "" {
+			t.Fatalf("取消应产生脚本错误区块: %+v", blocks)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Context 取消后纯 JS 未及时停止")
 	}
 }
 

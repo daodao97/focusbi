@@ -6,15 +6,19 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
 	"xproxy/conf"
+	"xproxy/internal/datasource"
 	"xproxy/internal/runtimecfg"
 
 	"github.com/dop251/goja"
 	"github.com/spf13/cast"
 )
+
+var datasetRefRe = regexp.MustCompile(`(?:dataset|block)\(\s*['"]([^'"]+)['"]\s*\)`)
 
 // 动态脚本报表 (移植自 dataddy 的脚本插件思路):
 // 报表里的 #!SCRIPT...#!END 区块是一段 JavaScript, 用 goja (纯 Go JS VM) 执行。
@@ -88,12 +92,14 @@ func scriptFetchIPBlocked(ip net.IP) bool {
 
 // scriptContext 是脚本执行所需的上下文。
 type scriptContext struct {
+	ctx        context.Context
 	defaultDSN string
 	params     map[string]string
 	authz      func(dsn string) error // 数据源授权 (nil = 不校验)
 	blocks     map[string]Block       // 已执行完成的 block, 按 id 引用
 	noCache    bool                   // 旁路查询缓存
 	cacheScope string                 // 脚本 KV 缓存作用域 (空=禁用)
+	query      func(string, string, int, ...any) (*datasource.QueryResult, error)
 }
 
 // runScript 执行一段脚本, 返回它产出的区块与过滤器。脚本出错/超时不崩报表, 以 Error 区块返回。
@@ -109,10 +115,31 @@ func runScript(code string, ctx scriptContext) (blocks []Block, filters []Filter
 	if timeout <= 0 {
 		timeout = runtimecfg.ScriptTimeout()
 	}
+	if ctx.ctx != nil {
+		if deadline, ok := ctx.ctx.Deadline(); ok && time.Until(deadline) < timeout {
+			timeout = time.Until(deadline)
+			if timeout <= 0 {
+				timeout = time.Nanosecond
+			}
+		}
+	}
 	timer := time.AfterFunc(timeout, func() {
 		vm.Interrupt("脚本执行超时")
 	})
 	defer timer.Stop()
+	// deadline 之外还要监听主动取消: 客户端断开时纯 JS 循环不会触达 query/fetch,
+	// 必须直接中断 VM。done 保证脚本正常结束时监听 goroutine 立即退出。
+	done := make(chan struct{})
+	defer close(done)
+	if ctx.ctx != nil {
+		go func() {
+			select {
+			case <-ctx.ctx.Done():
+				vm.Interrupt("报表执行已取消")
+			case <-done:
+			}
+		}()
+	}
 
 	// panic 兜底: goja 中断或脚本异常以 panic 抛出, 这里转成 Error 区块。
 	defer func() {
@@ -129,13 +156,20 @@ func runScript(code string, ctx scriptContext) (blocks []Block, filters []Filter
 		// 脚本语法/运行错误 (含中断): 已产出的区块保留, 末尾追加错误区块。
 		acc.blocks = append(acc.blocks, Block{Type: "raw", Error: "脚本错误: " + runErr.Error()})
 	}
+	if acc.queryTruncated {
+		for i := range acc.blocks {
+			acc.blocks[i].Truncated = true
+			acc.blocks[i].RowLimit = scriptQueryHardLimit
+		}
+	}
 	return acc.blocks, acc.filters, nil
 }
 
 // scriptResult 累积脚本通过 result.* 声明的区块与过滤器。
 type scriptResult struct {
-	blocks  []Block
-	filters []FilterDef
+	blocks         []Block
+	filters        []FilterDef
+	queryTruncated bool
 }
 
 // injectScriptAPI 把全局 API 注入 goja Runtime。
@@ -197,11 +231,28 @@ func injectScriptAPI(vm *goja.Runtime, ctx scriptContext, acc *scriptResult) {
 				panic(vm.ToValue(err.Error()))
 			}
 		}
-		qr, err := cachedQuery(dsn, sql, ttlSec, ctx.noCache, args...)
+		// 脚本查询统一施加硬上限, 防止脚本意外把超大结果集装入进程内存。
+		sql = enforceHardLimit(sql, scriptQueryHardLimit+1)
+		queryCtx := ctx.ctx
+		if queryCtx == nil {
+			queryCtx = context.Background()
+		}
+		var qr *datasource.QueryResult
+		var err error
+		if ctx.query != nil {
+			qr, err = ctx.query(dsn, sql, ttlSec, args...)
+		} else {
+			qr, err = cachedQueryContext(queryCtx, dsn, sql, ttlSec, ctx.noCache, args...)
+		}
 		if err != nil {
 			panic(vm.ToValue("query 失败: " + err.Error()))
 		}
-		return vm.ToValue(qr.Rows)
+		rows := qr.Rows
+		if len(rows) > scriptQueryHardLimit {
+			rows = rows[:scriptQueryHardLimit]
+			acc.queryTruncated = true
+		}
+		return vm.ToValue(rows)
 	})
 
 	// cache.get(key) / cache.set(key, value, ttlSec): 脚本自定义 KV 缓存 (进程内, 全局命名空间)。
@@ -258,7 +309,7 @@ func injectScriptAPI(vm *goja.Runtime, ctx scriptContext, acc *scriptResult) {
 
 	// fetch(url, opts?) -> {status, body, json()}  (外呼权限由 engine.script_fetch 控制)
 	_ = vm.Set("fetch", func(call goja.FunctionCall) goja.Value {
-		return scriptFetch(vm, call)
+		return scriptFetch(vm, ctx.ctx, call)
 	})
 
 	// where({...}) -> {sql, args}: 把条件对象拼成参数化 WHERE 片段。
@@ -746,7 +797,7 @@ func columnsForJS(cols []Column) []map[string]any {
 }
 
 // scriptFetch 实现 fetch(url, opts?) -> {status, body, json()}。
-func scriptFetch(vm *goja.Runtime, call goja.FunctionCall) goja.Value {
+func scriptFetch(vm *goja.Runtime, ctx context.Context, call goja.FunctionCall) goja.Value {
 	url := call.Argument(0).String()
 	// SSRF 防护: 按 engine.script_fetch 配置校验目标 (off / 前缀白名单 / 默认放行)。
 	mode, _ := runtimecfg.ScriptFetch()
@@ -771,7 +822,10 @@ func scriptFetch(vm *goja.Runtime, call goja.FunctionCall) goja.Value {
 			}
 		}
 	}
-	req, err := http.NewRequest(method, url, bodyReader)
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	req, err := http.NewRequestWithContext(ctx, method, url, bodyReader)
 	if err != nil {
 		panic(vm.ToValue("fetch 请求构造失败: " + err.Error()))
 	}

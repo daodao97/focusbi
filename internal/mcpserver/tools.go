@@ -373,7 +373,7 @@ func previewTemplateTool(ctx context.Context, _ *mcp.CallToolRequest, in preview
 	}
 	// 按调用者权限校验模板触达的每个数据源。
 	result, err := engine.NewRunner(in.DSN).WithNoCache(true).
-		WithAuthz(pr.perm.DsnAuthz(nameToID)).Run(in.Content, in.Params)
+		WithAuthz(pr.perm.DsnAuthz(nameToID)).RunContext(ctx, in.Content, in.Params)
 	if err != nil {
 		return nil, previewOut{}, err
 	}

@@ -55,6 +55,8 @@ type SecurityConf struct {
 
 // EngineConf 是报表执行引擎配置。
 type EngineConf struct {
+	// ReportTimeout 单次完整报表运行的总超时, 默认 10 分钟。
+	ReportTimeout string `json:"report_timeout" yaml:"report_timeout" env:"REPORT_TIMEOUT"`
 	// QueryTimeout 单次数据源查询超时, Go duration 字符串, 如 "30s" / "3m"。
 	// 为空或非法时使用默认值。
 	QueryTimeout string `json:"query_timeout" yaml:"query_timeout" env:"QUERY_TIMEOUT"`
@@ -97,6 +99,18 @@ func (c *Conf) JWTSecretOrDefault() string {
 
 const defaultQueryTimeout = 3 * time.Minute
 const defaultScriptTimeout = 3 * time.Minute
+const defaultReportTimeout = 10 * time.Minute
+
+func (c *Conf) ReportTimeoutDuration() time.Duration {
+	if c == nil {
+		return defaultReportTimeout
+	}
+	d, err := time.ParseDuration(strings.TrimSpace(c.Engine.ReportTimeout))
+	if err != nil || d <= 0 {
+		return defaultReportTimeout
+	}
+	return d
+}
 
 // QueryTimeoutDuration 返回单次数据源查询超时。未配置/非法/非正数时回退到默认 3 分钟。
 func (c *Conf) QueryTimeoutDuration() time.Duration {
@@ -263,7 +277,19 @@ func Init() error {
 	if err := ConfInstance.validateJWTSecret(); err != nil {
 		return err
 	}
+	if err := ConfInstance.validateRedis(); err != nil {
+		return err
+	}
 
+	return nil
+}
+
+// validateRedis 保证默认 Redis 客户端一定能在启动阶段初始化。
+// Redis 是缓存、分布式锁和公开报表并发控制的强依赖, 不允许延迟到请求阶段才失败。
+func (c *Conf) validateRedis() error {
+	if c == nil || len(c.Redis) == 0 {
+		return fmt.Errorf("必须配置至少一个 redis 实例")
+	}
 	return nil
 }
 

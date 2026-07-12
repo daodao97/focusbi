@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/caarlos0/env/v11"
+	"github.com/daodao97/xgo/xredis"
 )
 
 func TestValidateJWTSecret(t *testing.T) {
@@ -21,6 +22,15 @@ func TestValidateJWTSecret(t *testing.T) {
 		if (&Conf{Site: SiteConf{JWTSecret: s}}).validateJWTSecret() != nil {
 			t.Errorf("密钥 %q 应被接受", s)
 		}
+	}
+}
+
+func TestValidateRedis(t *testing.T) {
+	if (*Conf)(nil).validateRedis() == nil || (&Conf{}).validateRedis() == nil {
+		t.Fatal("缺少 Redis 配置时应拒绝启动")
+	}
+	if (&Conf{Redis: make([]xredis.Options, 1)}).validateRedis() != nil {
+		t.Fatal("存在 Redis 配置时不应拒绝启动")
 	}
 }
 

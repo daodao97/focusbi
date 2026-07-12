@@ -36,6 +36,7 @@ const dsnList = ref([])
 const params = ref({})
 const preview = ref(null)
 const previewing = ref(false)
+let previewController
 const loading = ref(true) // 初次加载报表数据时的整体过渡 (默认 true, load 完成置 false)
 const mode = ref('edit') // edit | preview
 const docOpen = ref(false)
@@ -108,25 +109,33 @@ async function load() {
 }
 
 async function doPreview() {
+	if (previewController) previewController.abort()
+	const controller = new AbortController()
+	previewController = controller
   previewing.value = true
   try {
-    preview.value = await api.previewReport({ dsn: report.dsn, content: report.content, params: params.value })
+	preview.value = await api.previewReport({ dsn: report.dsn, content: report.content, params: params.value }, controller.signal)
     mode.value = 'preview'
-  } catch (e) {
+	} catch (e) {
+	if (e.name === 'AbortError') return
     ElMessage.error(e.message)
   } finally {
-    previewing.value = false
+	if (previewController === controller) previewing.value = false
   }
 }
 
 async function rerun() {
+	if (previewController) previewController.abort()
+	const controller = new AbortController()
+	previewController = controller
   previewing.value = true
   try {
-    preview.value = await api.previewReport({ dsn: report.dsn, content: report.content, params: params.value })
-  } catch (e) {
+	preview.value = await api.previewReport({ dsn: report.dsn, content: report.content, params: params.value }, controller.signal)
+	} catch (e) {
+	if (e.name === 'AbortError') return
     ElMessage.error(e.message)
   } finally {
-    previewing.value = false
+	if (previewController === controller) previewing.value = false
   }
 }
 
@@ -164,9 +173,10 @@ async function publish() {
   try {
     const id = await save(true) // 静默保存, 不触发跳转
     if (!id) return
-    await api.publishReport(id)
-    publishedContent.value = report.content // 草稿即发布版, dirty 归零
-    ElMessage.success('已发布')
+	const published = await api.publishReport(id)
+	publishedContent.value = report.content // 草稿即发布版, dirty 归零
+	const warningCount = published?.warnings?.length || 0
+	ElMessage.success(warningCount ? `已发布，另有 ${warningCount} 条校验提醒` : '已发布')
     // action='publish': 已上线, 宿主可跳转到查看页
     emit('saved', id, 'publish')
   } catch (e) {

@@ -316,7 +316,8 @@ curl -fsSL https://raw.githubusercontent.com/daodao97/focusbi/main/deploy/instal
 | `site.jwt_secret` | **必填**，登录 token 签名密钥。为空或默认值时拒绝启动 |
 | `site.url` | 站点对外地址，用于定时任务里拼报表链接 |
 | `database` | 主库 (必须是 MySQL)，保存用户/报表/版本数据 |
-| `redis` | 缓存和分布式锁（多实例部署必需） |
+| `redis` | 缓存、分布式锁和公开报表限流（系统强依赖） |
+| `engine.report_timeout` | 单次完整报表运行总超时，默认 `10m`；可动态覆盖 |
 | `engine.query_timeout` | 单次 SQL 查询超时，默认 `3m`；可动态覆盖 |
 | `engine.query_concurrency` | 单个报表的 SQL 区块并发数，默认 `8`；可动态覆盖 |
 | `engine.script_timeout` | 单个脚本区块执行超时，默认 `3m`；可动态覆盖 |
@@ -359,7 +360,7 @@ ENABLE_CRON=true go run ./cmd --app-env dev   # 启用定时任务调度
 
 **数据库**: MySQL (主库，必需) + PostgreSQL/SQLite (报表数据源可选)
 
-**缓存/锁**: Redis (多实例部署必需，单实例可选)
+**缓存/锁/公开报表限流**: Redis（系统强依赖）
 
 ---
 

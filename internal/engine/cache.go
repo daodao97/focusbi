@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -32,6 +33,9 @@ var (
 	maxCacheRows    = 5000 // 单结果可缓存的行数上限
 )
 
+// executeQueryContext 便于验证请求取消与单次运行查询合并。
+var executeQueryContext = datasource.QueryContext
+
 var (
 	queryCacheMu sync.Mutex
 	queryCache   = map[string]cacheEntry{}
@@ -51,8 +55,12 @@ func cacheKey(identity, sql string, args ...any) string {
 // bypass=true (前端刷新) 时跳过读缓存但仍回写, 让刷新后的新数据对其他访问者生效。
 // 命中缓存返回结果副本, 避免后续列格式化/排序/透视等处理污染缓存。
 func cachedQuery(dsn, sql string, ttlSec int, bypass bool, args ...any) (*datasource.QueryResult, error) {
+	return cachedQueryContext(context.Background(), dsn, sql, ttlSec, bypass, args...)
+}
+
+func cachedQueryContext(ctx context.Context, dsn, sql string, ttlSec int, bypass bool, args ...any) (*datasource.QueryResult, error) {
 	if ttlSec <= 0 {
-		return datasource.Query(dsn, sql, args...)
+		return executeQueryContext(ctx, dsn, sql, args...)
 	}
 	identity, err := datasource.CacheIdentity(dsn)
 	if err != nil {
@@ -70,7 +78,7 @@ func cachedQuery(dsn, sql string, ttlSec int, bypass bool, args ...any) (*dataso
 		queryCacheMu.Unlock()
 	}
 
-	res, err := datasource.Query(dsn, sql, args...)
+	res, err := executeQueryContext(ctx, dsn, sql, args...)
 	if err != nil {
 		return nil, err
 	}

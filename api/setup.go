@@ -605,6 +605,17 @@ func publishReport(c *gin.Context) {
 		return
 	}
 	if !r.IsFolder() {
+		_, validationIssues := engine.Validate(r.DevContent)
+		var validationErrors []string
+		for _, issue := range validationIssues {
+			if issue.Severity == "error" {
+				validationErrors = append(validationErrors, fmt.Sprintf("区块 %d: %s", issue.BlockIndex, issue.Message))
+			}
+		}
+		if len(validationErrors) > 0 {
+			fail(c, http.StatusBadRequest, "模板校验失败: "+strings.Join(validationErrors, "; "))
+			return
+		}
 		dsns, ok := authorizeReportContentDSNs(c, r.DSN, r.DevContent)
 		if !ok {
 			return
@@ -621,7 +632,14 @@ func publishReport(c *gin.Context) {
 	// 记录发布版本 (失败不阻断发布本身, 仅影响历史)
 	uid, nick := currentUser(c)
 	_ = dao.AddReportVersion(id, r.DevContent, uid, nick)
-	ok(c, gin.H{"id": id})
+	_, validationIssues := engine.Validate(r.DevContent)
+	var warnings []engine.ValidationIssue
+	for _, issue := range validationIssues {
+		if issue.Severity == "warning" {
+			warnings = append(warnings, issue)
+		}
+	}
+	ok(c, gin.H{"id": id, "warnings": warnings})
 }
 
 // currentUser 取当前登录用户的 id 与昵称 (用于记录操作人)。
@@ -856,7 +874,7 @@ func runReport(c *gin.Context) {
 		WithNoCache(noCache).
 		WithAuthz(dsnAuthzOf(c)). // 按调用者权限校验报表触达的每个数据源
 		WithTrace(reportRunTrace(c, id, r.Name, noCache)).
-		Run(r.Content, req.Params)
+		RunContext(c.Request.Context(), r.Content, req.Params)
 	if err != nil {
 		fail(c, http.StatusInternalServerError, err.Error())
 		return
@@ -957,7 +975,7 @@ func previewReport(c *gin.Context) {
 		return
 	}
 	// 预览始终取实时数据, 旁路缓存; 同样按调用者权限校验数据源。
-	result, err := engine.NewRunner(req.DSN).WithNoCache(true).WithAuthz(dsnAuthzOf(c)).Run(req.Content, req.Params)
+	result, err := engine.NewRunner(req.DSN).WithNoCache(true).WithAuthz(dsnAuthzOf(c)).RunContext(c.Request.Context(), req.Content, req.Params)
 	if err != nil {
 		fail(c, http.StatusInternalServerError, err.Error())
 		return

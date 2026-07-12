@@ -6,13 +6,8 @@ import (
 	"strings"
 	"time"
 
-	"xproxy/internal/datasource"
-
 	"github.com/spf13/cast"
 )
-
-// filterRe 匹配 ${name|label|default|type(params)} 形式的过滤器定义。
-var filterRe = regexp.MustCompile(`\$\{([^}]*)\}`)
 
 // enumOptRe 匹配 enum 参数 "1:成功,0:失败" 这样的候选项。
 var enumOptRe = regexp.MustCompile(`^[^:]+:.+`)
@@ -41,7 +36,7 @@ func parseFilters(content string) ([]FilterDef, string) {
 	// 一次性扫描: 标记段外的 ${...} 既提取为过滤器, 又从 cleaned 中删除; 标记段内原样保留。
 	var b strings.Builder
 	prev := 0
-	for _, loc := range filterRe.FindAllStringSubmatchIndex(content, -1) {
+	for _, loc := range findFilterMatches(content) {
 		if inSkip(loc[0]) {
 			continue // 标记段内: 不提取也不删除
 		}
@@ -60,9 +55,140 @@ func parseFilters(content string) ([]FilterDef, string) {
 		filters = append(filters, f)
 	}
 	b.WriteString(content[prev:])
+	// 所有过滤器解析完成后再计算依赖, 才能区分真实名称 from_x 与日期范围派生宏 from_x。
+	for i := range filters {
+		if filters[i].optionSQL != "" {
+			filters[i].DependsOn = filterDependencies(filters[i].optionSQL, filters[i].Name, filters)
+		}
+	}
 
 	cleaned := regexp.MustCompile(`(?m)^\s*;\s*$`).ReplaceAllString(b.String(), "")
 	return filters, cleaned
+}
+
+// findFilterMatches 返回 ${...} 的 [整体起,整体止,内容起,内容止]。
+// 与简单正则不同, 它允许 enum_sql 内包含 {parent} 级联宏。
+func findFilterMatches(content string) [][4]int {
+	var out [][4]int
+	for i := 0; i+1 < len(content); {
+		if content[i] != '$' || content[i+1] != '{' {
+			i++
+			continue
+		}
+		start := i
+		i += 2
+		bodyStart := i
+		pipeCount := 0
+		sqlMode := false
+		quote := byte(0)
+		closed := false
+		for i < len(content) {
+			if sqlMode && quote != 0 {
+				// 级联宏通常写在 SQL 字符串里 ('{parent}'), 它自己的 } 不是过滤器结尾。
+				if content[i] == '{' {
+					if loc := macroRe.FindStringIndex(content[i:]); loc != nil && loc[0] == 0 {
+						i += loc[1]
+						continue
+					}
+				}
+				if content[i] == '\\' && i+1 < len(content) {
+					i += 2
+					continue
+				}
+				if content[i] == quote {
+					if i+1 < len(content) && content[i+1] == quote {
+						i += 2
+						continue
+					}
+					quote = 0
+				}
+				i++
+				continue
+			}
+			// 仅 enum_sql 的类型字段按 SQL 语法扫描。普通 label/default/enum 值里的撇号是字面字符。
+			if !sqlMode {
+				if content[i] == '|' {
+					pipeCount++
+					if pipeCount == 3 {
+						sqlMode = hasEnumSQLPrefix(content[i+1:])
+					}
+					i++
+					continue
+				}
+				if content[i] == '}' {
+					out = append(out, [4]int{start, i + 1, bodyStart, i})
+					i++
+					closed = true
+					break
+				}
+				i++
+				continue
+			}
+
+			// SQL 注释里的引号、宏和 } 都不参与过滤器边界判断。
+			if content[i] == '-' && i+1 < len(content) && content[i+1] == '-' {
+				i += 2
+				for i < len(content) && content[i] != '\n' && content[i] != '\r' {
+					i++
+				}
+				continue
+			}
+			if content[i] == '#' {
+				i++
+				for i < len(content) && content[i] != '\n' && content[i] != '\r' {
+					i++
+				}
+				continue
+			}
+			if content[i] == '/' && i+1 < len(content) && content[i+1] == '*' {
+				i += 2
+				for i+1 < len(content) && !(content[i] == '*' && content[i+1] == '/') {
+					i++
+				}
+				if i+1 < len(content) {
+					i += 2
+				}
+				continue
+			}
+			if content[i] == '{' {
+				if loc := macroRe.FindStringIndex(content[i:]); loc != nil && loc[0] == 0 {
+					i += loc[1]
+					continue
+				}
+			}
+			if content[i] == '\'' || content[i] == '"' || content[i] == '`' {
+				quote = content[i]
+				i++
+				continue
+			}
+			if content[i] == '$' {
+				if delimiter, ok := sqlDollarQuoteDelimiter(content, i); ok {
+					i = skipSQLDollarQuoted(content, i, delimiter)
+					continue
+				}
+			}
+			if content[i] == '}' {
+				out = append(out, [4]int{start, i + 1, bodyStart, i})
+				i++
+				closed = true
+				break
+			}
+			i++
+		}
+		if !closed {
+			break
+		}
+	}
+	return out
+}
+
+func hasEnumSQLPrefix(s string) bool {
+	s = strings.TrimLeft(s, " \t\r\n")
+	const prefix = "enum_sql"
+	if len(s) < len(prefix) || !strings.EqualFold(s[:len(prefix)], prefix) {
+		return false
+	}
+	return len(s) == len(prefix) || strings.ContainsRune(".[( \t\r\n", rune(s[len(prefix)]))
 }
 
 // parseFilterBody 解析 "name|label|default|type(params)"。
@@ -112,7 +238,8 @@ func parseEnumSQL(s string) (sql, dsn string, multiple, ok bool) {
 
 // resolveFilterOptions 为带 optionSQL 的过滤器 (enum_sql) 查库填充 Options。
 // 查询取首两列作为 value / label (仅一列则 value=label)。查询出错则该过滤器选项留空, 不崩报表。
-func (r *Runner) resolveFilterOptions(filters []FilterDef) {
+func (r *Runner) resolveFilterOptions(filters []FilterDef, params map[string]string) {
+	macros := macroValues(filters, params)
 	for i := range filters {
 		f := &filters[i]
 		if f.optionSQL == "" {
@@ -127,15 +254,104 @@ func (r *Runner) resolveFilterOptions(filters []FilterDef) {
 			continue
 		}
 		// 只读契约: enum_sql 与声明式区块/脚本 query() 一样只允许只读查询, 非法则跳过 (选项留空)。
-		if err := validateReadOnlySQL(f.optionSQL); err != nil {
+		optionSQL := applyMacros(f.optionSQL, macros)
+		if err := validateReadOnlySQL(optionSQL); err != nil {
 			continue
 		}
-		qr, err := datasource.Query(dsn, f.optionSQL)
+		qr, err := r.query(dsn, enforceHardLimit(optionSQL, enumSQLHardLimit+1), 0)
 		if err != nil || qr == nil {
 			continue
 		}
+		if len(qr.Rows) > enumSQLHardLimit {
+			qr.Rows = qr.Rows[:enumSQLHardLimit]
+			f.Truncated = true
+			f.RowLimit = enumSQLHardLimit
+		}
 		f.Options = rowsToOptions(qr.Columns, qr.Rows)
 	}
+}
+
+func filterDependencies(sql, self string, filters []FilterDef) []string {
+	byName := make(map[string]FilterDef, len(filters))
+	for _, f := range filters {
+		byName[f.Name] = f
+	}
+	seen := map[string]bool{}
+	var out []string
+	for _, m := range macroRe.FindAllStringSubmatch(withoutSQLComments(sql), -1) {
+		for _, name := range strings.Split(m[2], ",") {
+			name = strings.TrimSpace(name)
+			// 完整名称优先。只有不存在同名过滤器时, 才把 from_/to_ 解释为范围派生宏。
+			if _, ok := byName[name]; !ok {
+				for _, prefix := range []string{"from_", "to_"} {
+					base := strings.TrimPrefix(name, prefix)
+					if base == name {
+						continue
+					}
+					if f, exists := byName[base]; exists && (f.Type == "date_range" || f.Type == "time_range") {
+						name = base
+					}
+					break
+				}
+			}
+			if name != "" && name != self && !seen[name] {
+				seen[name] = true
+				out = append(out, name)
+			}
+		}
+	}
+	return out
+}
+
+// withoutSQLComments 保留字符串内容与位置, 仅清空 SQL 注释, 避免注释中的示例宏形成级联依赖。
+func withoutSQLComments(sql string) string {
+	b := []byte(sql)
+	blank := func(from, to int) {
+		for i := from; i < to; i++ {
+			if b[i] != '\n' && b[i] != '\r' {
+				b[i] = ' '
+			}
+		}
+	}
+	for i := 0; i < len(sql); {
+		switch {
+		case sql[i] == '\'' || sql[i] == '"' || sql[i] == '`':
+			i = skipSQLQuoted(sql, i, sql[i])
+		case sql[i] == '$':
+			if delimiter, ok := sqlDollarQuoteDelimiter(sql, i); ok {
+				i = skipSQLDollarQuoted(sql, i, delimiter)
+			} else {
+				i++
+			}
+		case sql[i] == '-' && i+1 < len(sql) && sql[i+1] == '-':
+			start := i
+			i += 2
+			for i < len(sql) && sql[i] != '\n' && sql[i] != '\r' {
+				i++
+			}
+			blank(start, i)
+		case sql[i] == '#':
+			start := i
+			i++
+			for i < len(sql) && sql[i] != '\n' && sql[i] != '\r' {
+				i++
+			}
+			blank(start, i)
+		case sql[i] == '/' && i+1 < len(sql) && sql[i+1] == '*':
+			start := i
+			i += 2
+			for i+1 < len(sql) && !(sql[i] == '*' && sql[i+1] == '/') {
+				i++
+			}
+			if i+1 < len(sql) {
+				i += 2
+			}
+			blank(start, i)
+		default:
+			i++
+		}
+	}
+	return string(b)
 }
 
 // rowsToOptions 把查询结果转成过滤器选项。

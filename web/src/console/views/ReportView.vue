@@ -24,6 +24,7 @@ const result = ref(null)
 const safePrependContent = computed(() => sanitizeReportHtml(result.value?.prepend_content))
 const params = ref({})
 const loading = ref(false)
+let runController
 
 // 分享弹窗
 const shareDialog = ref(false)
@@ -45,16 +46,20 @@ async function load() {
 const autoRefresh = useAutoRefresh(() => run(true))
 
 async function run(force = false) {
+	if (runController) runController.abort()
+	const controller = new AbortController()
+	runController = controller
   loading.value = true
   try {
     // force=true (点击"刷新") 旁路查询缓存。
     const p = force === true ? { ...params.value, _nocache: '1' } : params.value
-    result.value = await api.runReport(Number(props.id), p)
+	result.value = await api.runReport(Number(props.id), p, controller.signal)
     autoRefresh.arm(result.value?.auto_refresh)
-  } catch (e) {
+	} catch (e) {
+	if (e.name === 'AbortError') return
     ElMessage.error(e.message)
   } finally {
-    loading.value = false
+	if (runController === controller) loading.value = false
   }
 }
 

@@ -64,6 +64,11 @@ func sqlTokens(sql string) (tokens []string, semicolons int) {
 			for i < len(sql) && sql[i] != '\n' && sql[i] != '\r' {
 				i++
 			}
+		case c == '#':
+			i++
+			for i < len(sql) && sql[i] != '\n' && sql[i] != '\r' {
+				i++
+			}
 		case c == '/' && i+1 < len(sql) && sql[i+1] == '*':
 			i += 2
 			for i+1 < len(sql) && !(sql[i] == '*' && sql[i+1] == '/') {
@@ -78,6 +83,12 @@ func sqlTokens(sql string) (tokens []string, semicolons int) {
 			i = skipSQLQuoted(sql, i, '"')
 		case c == '`':
 			i = skipSQLQuoted(sql, i, '`')
+		case c == '$':
+			if delimiter, ok := sqlDollarQuoteDelimiter(sql, i); ok {
+				i = skipSQLDollarQuoted(sql, i, delimiter)
+			} else {
+				i++
+			}
 		case c == '[':
 			i++
 			for i < len(sql) && sql[i] != ']' {
@@ -101,6 +112,30 @@ func sqlTokens(sql string) (tokens []string, semicolons int) {
 		}
 	}
 	return tokens, semicolons
+}
+
+// sqlDollarQuoteDelimiter 识别 PostgreSQL 的 $$...$$ / $tag$...$tag$。
+func sqlDollarQuoteDelimiter(sql string, i int) (string, bool) {
+	if i >= len(sql) || sql[i] != '$' {
+		return "", false
+	}
+	j := i + 1
+	for j < len(sql) && (sql[j] == '_' || sql[j] >= 'a' && sql[j] <= 'z' ||
+		sql[j] >= 'A' && sql[j] <= 'Z' || j > i+1 && sql[j] >= '0' && sql[j] <= '9') {
+		j++
+	}
+	if j < len(sql) && sql[j] == '$' {
+		return sql[i : j+1], true
+	}
+	return "", false
+}
+
+func skipSQLDollarQuoted(sql string, i int, delimiter string) int {
+	start := i + len(delimiter)
+	if end := strings.Index(sql[start:], delimiter); end >= 0 {
+		return start + end + len(delimiter)
+	}
+	return len(sql)
 }
 
 func skipSQLQuoted(sql string, i int, quote byte) int {

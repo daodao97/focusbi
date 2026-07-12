@@ -111,7 +111,7 @@ raw 区块 (原样输出, 适合展示纯文本/已转义内容)：
 | `@avg` | 显示平均行 | `-- @avg=true` |
 | `@invisible` | 隐藏表格主体, 仅留图表 | `-- @invisible=true` |
 | `@hidden` | 执行并可被脚本引用, 但不渲染 | `-- @hidden=true` |
-| `@limit` | 覆盖自动 LIMIT (默认 1000; `0` 不限制) | `-- @limit=500` |
+| `@limit` | 覆盖自动 LIMIT (默认 1000; `0` 取消模板级限制, 仍受系统 100000 行硬上限约束) | `-- @limit=500` |
 | `@merge_cell` | 纵向合并相邻同值单元格 | `-- @merge_cell=月份,业务线` |
 | `@series` | 行转列透视 (见 §5) | `-- @series={"x":"day","series":"channel","value":"amount"}` |
 | `@sql_cache` | 查询结果缓存秒数 (0/缺省不缓存) | `-- @sql_cache=300` |
@@ -130,7 +130,9 @@ raw 区块 (原样输出, 适合展示纯文本/已转义内容)：
   比率/百分比/已聚合的列用 `-- @{"nosum":true}` 排除, 避免被错误累加。
   > 注意：**不要在 SQL 里再手写合计行** (如 `UNION ALL SELECT '合计' ...) 然后又开
   > `@sum=true` —— 引擎会把你手写的合计行也算进去, 导致**合计翻倍**。二选一即可。
-- **`@limit`**: 仅对没有 LIMIT 的 SELECT/WITH 追加, 防止误查全表。
+- **`@limit`**: 仅对没有 LIMIT 的 SELECT/WITH 追加, 防止误查全表。所有 SQL 区块最终均受
+  100000 行系统硬上限约束; `@limit=0` 只取消默认 1000 行限制。触达硬上限时页面会明确提示
+  结果已截断。
 - **`@hidden`**: 适合把某个 SQL block 当作复用数据源。该 block 会正常执行、进入脚本引用表,
   但不会渲染到页面。若执行报错, 错误仍会显示出来, 方便排查。
 - **`@merge_cell`**: 层级合并 —— 后列仅当其前置合并列也相同时才合并, 适合月度/分组明细。
@@ -405,6 +407,7 @@ FROM orders;
 | `time2str` | Unix 时间戳 (秒) 转日期字符串 | `{"time2str":"Y-m-d H:i:s"}` |
 | `percent` | 条件百分比 (值/base×100, 按阈值变色) | `{"percent":{"base":"total","succ":70,"warn":40}}` |
 | `href` | 单元格渲染为链接, `{字段}` 取本行值; 仅允许相对地址及 http/https/mailto/tel | `{"href":"/#/d?c={channel}"}` |
+| `drilldown` | 点击单元格跳到另一张报表, `params` 把本行字段映射为目标过滤参数 | `{"drilldown":{"report":25,"params":{"region":"{region}"}}}` |
 | `tag` | 单元格按值渲染为彩色标签 (el-tag) | `{"tag":"1:success:已完成,0:danger:失败"}` |
 
 ### 单元格标签 `tag`
@@ -543,6 +546,9 @@ ${owner|负责人||enum_sql[crm](SELECT uid AS value, nick AS label FROM users)}
 - 查询取 **value / label 两列** 作为选项的值与显示文本; 若结果列名含 `value`/`label`
   则按名取, 否则取**前两列** (单列时 value=label)。
 - `enum_sql[dsn](...)`: 方括号里指定**独立数据源** (维度表在别的库时用); 省略则用报表数据源。
+- 每条 `enum_sql` 最多读取 5000 行, 防止维度选项过多拖慢页面。
+- `enum_sql` 可以引用前面过滤器的宏实现级联。例如城市 SQL 使用 `'{province}'`, 省份变化时
+  前端会清空城市值并自动重查选项。
 - 选项在报表加载时查一次填充; 查询出错则选项为空, 不影响报表其余部分。
 - 用法与 `enum` 一致, SQL 里照常用 `{region}` 引用所选值。
 
@@ -718,7 +724,7 @@ result.table({
 | `setParam(name, value)` | 写回派生参数, 供后续 SQL 的 `{name}` 宏 / 条件行 `{?name}` 使用; **仅在 `@setup` 前置脚本里有效** (见 §11.1) |
 | `dataset(id)` | 按前面已执行 block 的 `@id` 读取 rows 副本 |
 | `block(id)` | 按前面已执行 block 的 `@id` 读取 `{id,type,title,subtitle,notice,columns,rows,summary,average,chart,sql,error,invisible,hidden,merge_cell}` 副本 |
-| `query(sql, args?, dsnOrOptions?, options?)` | 执行 SQL 返回行数组; `args` 为 `?` 占位参数 (**参数化, 防注入**); 可覆盖数据源和缓存 |
+| `query(sql, args?, dsnOrOptions?, options?)` | 执行 SQL 返回行数组 (最多 10000 行); `args` 为 `?` 占位参数 (**参数化, 防注入**); 可覆盖数据源和缓存 |
 | `where(obj)` | 把条件对象拼成参数化 WHERE 片段, 返回 `{sql, args}` (空值自动跳过, 见下) |
 | `result.table({id,title,subtitle,notice,columns,rows,chart,kpi,formats,sum,avg,row_tag,invisible,hidden,merge_cell})` | 产出表格区块; 列配置/图表/KPI/汇总/行样式同声明式 (见下) |
 | `result.markdown(text)` | 产出 markdown 区块 |

@@ -223,17 +223,23 @@ func Invalidate(name string) {
 // 共用】的整个 *sql.DB 池与隧道, 把正在用该池的其它并发查询连带打断 (unexpected
 // EOF), 并触发 Invalidate 正反馈雪崩。并发预取上线后暴露, 故移除。
 func Query(name, query string, args ...any) (*QueryResult, error) {
-	return queryOnce(name, query, args...)
+	return QueryContext(context.Background(), name, query, args...)
+}
+
+// QueryContext 执行可由上游取消的查询。实际 deadline 取报表总超时与单 SQL
+// 超时中更早到达的一个。
+func QueryContext(parent context.Context, name, query string, args ...any) (*QueryResult, error) {
+	return queryOnce(parent, name, query, args...)
 }
 
 // queryOnce 执行一次查询。
-func queryOnce(name, query string, args ...any) (*QueryResult, error) {
+func queryOnce(parent context.Context, name, query string, args ...any) (*QueryResult, error) {
 	db, err := get(name)
 	if err != nil {
 		return nil, err
 	}
 
-	ctx, cancel := contextTimeout()
+	ctx, cancel := context.WithTimeout(parent, runtimecfg.QueryTimeout())
 	defer cancel()
 
 	rows, err := db.QueryContext(ctx, query, args...)

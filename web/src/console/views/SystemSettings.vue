@@ -10,6 +10,7 @@ const ready = ref(false)
 const mode = ref('off')
 const allowlist = ref('')
 const queryTimeout = ref('3m')
+const reportTimeout = ref('10m')
 const queryConcurrency = ref(8)
 const scriptTimeout = ref('3m')
 const scheduleEnabled = ref(true)
@@ -19,6 +20,7 @@ const baseline = ref({})
 
 const settingKeys = [
   'engine.query_timeout',
+  'engine.report_timeout',
   'engine.query_concurrency',
   'engine.script_timeout',
   'schedule.enabled',
@@ -40,6 +42,7 @@ const defaultCount = computed(() => settingKeys.length - dynamicCount.value)
 const payload = computed(() => ({
   script_fetch: effectiveFetch.value,
   query_timeout: queryTimeout.value,
+  report_timeout: reportTimeout.value,
   query_concurrency: queryConcurrency.value,
   script_timeout: scriptTimeout.value,
   schedule_enabled: scheduleEnabled.value,
@@ -64,6 +67,7 @@ function applyFetch(value) {
 function applySettings(data) {
   applyFetch(data.script_fetch)
   queryTimeout.value = data.query_timeout || '3m'
+  reportTimeout.value = data.report_timeout || '10m'
   queryConcurrency.value = Number(data.query_concurrency) || 8
   scriptTimeout.value = data.script_timeout || '3m'
   scheduleEnabled.value = data.schedule_enabled !== false
@@ -136,6 +140,17 @@ onMounted(load)
           <h3>执行引擎</h3>
         </div>
         <div class="setting-list">
+          <div class="setting-row">
+            <div class="setting-name">
+              <span>报表总超时</span>
+              <small :class="{ dynamic: isDynamic('engine.report_timeout') }">
+                <i class="source-dot"></i>{{ sourceLabel('engine.report_timeout') }}
+              </small>
+            </div>
+            <div class="setting-control short-control">
+              <el-input v-model.trim="reportTimeout" placeholder="10m" />
+            </div>
+          </div>
           <div class="setting-row">
             <div class="setting-name">
               <span>SQL 查询超时</span>

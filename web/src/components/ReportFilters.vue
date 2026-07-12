@@ -9,9 +9,31 @@ const props = defineProps({
   loading: { type: Boolean, default: false }
 })
 const emit = defineEmits(['update:modelValue', 'run'])
+let cascadeTimer
 
 function set(name, val) {
-  emit('update:modelValue', { ...props.modelValue, [name]: val })
+  const next = { ...props.modelValue, [name]: val }
+  // 沿依赖图清空全部下游过滤器，例如 province -> city -> district。
+  const cleared = new Set()
+	// 源节点预先标记为已访问，循环依赖 A -> B -> A 时不能清空用户刚设置的 A。
+	const visited = new Set([name])
+  const queue = [name]
+  while (queue.length) {
+    const parent = queue.shift()
+    for (const f of props.filters) {
+	  if (!visited.has(f.name) && (f.depends_on || []).includes(parent)) {
+		visited.add(f.name)
+        cleared.add(f.name)
+        next[f.name] = ''
+        queue.push(f.name)
+      }
+    }
+  }
+  emit('update:modelValue', next)
+	if (cleared.size) {
+	  clearTimeout(cascadeTimer)
+	  cascadeTimer = setTimeout(() => emit('run'), 250)
+	}
 }
 
 // date_range / time_range 在 params 里以 "from,to" 字符串保存,
@@ -99,6 +121,7 @@ watch(
     <div class="filter-row">
       <div v-for="f in filters" :key="f.name" class="filter-item">
         <label>{{ f.label }}</label>
+		<small v-if="f.truncated" class="truncated">选项仅显示前 {{ f.row_limit }} 条</small>
         <el-select
           v-if="f.type === 'enum'"
           :model-value="f.multiple ? enumToArray(modelValue[f.name]) : (modelValue[f.name] || '')"
@@ -144,6 +167,7 @@ watch(
 .filter-row { display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-end; }
 .filter-item { display: flex; flex-direction: column; gap: 4px; }
 .filter-item label { font-size: 12px; color: var(--el-text-color-secondary); }
+.truncated { color: var(--el-color-warning); font-size: 11px; }
 
 /* 移动端: 控件固定宽 (160~360px) 会超出窗口, 改为每项占满整行, 输入控件随之 100%。 */
 @media (max-width: 640px) {
