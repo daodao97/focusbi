@@ -1,10 +1,13 @@
 package engine
 
 import (
+	"fmt"
+	"math"
 	"regexp"
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/spf13/cast"
 )
@@ -191,7 +194,7 @@ func hasEnumSQLPrefix(s string) bool {
 	return len(s) == len(prefix) || strings.ContainsRune(".[( \t\r\n", rune(s[len(prefix)]))
 }
 
-// parseFilterBody 解析 "name|label|default|type(params)"。
+// parseFilterBody 解析 "name|label|default|type(params);constraints"。
 func parseFilterBody(body string) FilterDef {
 	parts := strings.SplitN(body, "|", 4)
 	f := FilterDef{Type: "string"}
@@ -205,7 +208,7 @@ func parseFilterBody(body string) FilterDef {
 		f.Default = strings.TrimSpace(parts[2])
 	}
 	if len(parts) > 3 {
-		typePart := strings.TrimSpace(parts[3])
+		typePart, constraintPart := splitFilterConstraints(strings.TrimSpace(parts[3]))
 		// enum_sql[dsn](SELECT value, label FROM ...): 动态选项, 选项由 SQL 查询得到。
 		if sql, dsn, multiple, ok := parseEnumSQL(typePart); ok {
 			f.Type = "enum"
@@ -215,11 +218,144 @@ func parseFilterBody(body string) FilterDef {
 		} else {
 			f.Type, f.Format, f.Options, f.Multiple = parseFilterType(typePart)
 		}
+		constraints, constraintErr := parseFilterConstraints(constraintPart, f.Type)
+		f.constraintError = constraintErr
+		if constraintPart != "" {
+			f.Constraints = &constraints
+		}
 	}
 	if f.Label == "" {
 		f.Label = f.Name
 	}
 	return f
+}
+
+func splitFilterConstraints(s string) (string, string) {
+	lower := strings.ToLower(strings.TrimSpace(s))
+	if strings.HasPrefix(lower, "enum_sql") {
+		// enum_sql 内本身可以包含分号和括号，只认最外层右括号后的分号为约束分隔符。
+		if close := enumSQLClosingParen(s); close >= 0 {
+			tail := strings.TrimSpace(s[close+1:])
+			if strings.HasPrefix(tail, ";") {
+				return strings.TrimSpace(s[:close+1]), strings.TrimSpace(tail[1:])
+			}
+		}
+		return s, ""
+	}
+	if i := strings.IndexByte(s, ';'); i >= 0 {
+		return strings.TrimSpace(s[:i]), strings.TrimSpace(s[i+1:])
+	}
+	return s, ""
+}
+
+func enumSQLClosingParen(s string) int {
+	open := strings.IndexByte(s, '(')
+	if open < 0 {
+		return -1
+	}
+	depth := 0
+	for i := open; i < len(s); {
+		switch {
+		case s[i] == '\'' || s[i] == '"' || s[i] == '`':
+			i = skipSQLQuoted(s, i, s[i])
+		case s[i] == '$':
+			if delimiter, ok := sqlDollarQuoteDelimiter(s, i); ok {
+				i = skipSQLDollarQuoted(s, i, delimiter)
+			} else {
+				i++
+			}
+		case s[i] == '-' && i+1 < len(s) && s[i+1] == '-':
+			i += 2
+			for i < len(s) && s[i] != '\n' && s[i] != '\r' {
+				i++
+			}
+		case s[i] == '#':
+			i++
+			for i < len(s) && s[i] != '\n' && s[i] != '\r' {
+				i++
+			}
+		case s[i] == '/' && i+1 < len(s) && s[i+1] == '*':
+			i += 2
+			for i+1 < len(s) && !(s[i] == '*' && s[i+1] == '/') {
+				i++
+			}
+			if i+1 < len(s) {
+				i += 2
+			}
+		case s[i] == '(':
+			depth++
+			i++
+		case s[i] == ')':
+			depth--
+			if depth == 0 {
+				return i
+			}
+			i++
+		default:
+			i++
+		}
+	}
+	return -1
+}
+
+func parseFilterConstraints(s, typ string) (FilterConstraints, string) {
+	var c FilterConstraints
+	if strings.TrimSpace(s) == "" {
+		return c, ""
+	}
+	for _, raw := range strings.Split(s, ",") {
+		item := strings.TrimSpace(raw)
+		parts := strings.SplitN(item, "=", 2)
+		key := strings.TrimSpace(parts[0])
+		switch key {
+		case "required":
+			if len(parts) != 1 {
+				return c, "required 不接受参数"
+			}
+			c.Required = true
+		case "min", "max":
+			if typ != "number" {
+				return c, key + " 仅适用于 number"
+			}
+			if len(parts) != 2 {
+				return c, key + " 缺少数值"
+			}
+			v, err := strconv.ParseFloat(strings.TrimSpace(parts[1]), 64)
+			if err != nil {
+				return c, key + " 必须是数值"
+			}
+			if key == "min" {
+				c.Min = &v
+			} else {
+				c.Max = &v
+			}
+		case "min_length", "max_length":
+			if typ != "string" {
+				return c, key + " 仅适用于 string"
+			}
+			if len(parts) != 2 {
+				return c, key + " 缺少整数"
+			}
+			v, err := strconv.Atoi(strings.TrimSpace(parts[1]))
+			if err != nil || v < 0 {
+				return c, key + " 必须是非负整数"
+			}
+			if key == "min_length" {
+				c.MinLength = &v
+			} else {
+				c.MaxLength = &v
+			}
+		default:
+			return c, "未知约束: " + key
+		}
+	}
+	if c.Min != nil && c.Max != nil && *c.Min > *c.Max {
+		return c, "min 不能大于 max"
+	}
+	if c.MinLength != nil && c.MaxLength != nil && *c.MinLength > *c.MaxLength {
+		return c, "min_length 不能大于 max_length"
+	}
+	return c, ""
 }
 
 // enumSQLRe 匹配 enum_sql[.multiple][\[dsn\]](SQL); SQL 可含括号, 取最外层括号内全部。
@@ -268,7 +404,88 @@ func (r *Runner) resolveFilterOptions(filters []FilterDef, params map[string]str
 			f.RowLimit = enumSQLHardLimit
 		}
 		f.Options = rowsToOptions(qr.Columns, qr.Rows)
+		f.optionResolved = true
 	}
+}
+
+// ParamValidationError 表示请求过滤参数不满足模板约束。
+type ParamValidationError struct{ Message string }
+
+func (e *ParamValidationError) Error() string { return "参数校验失败: " + e.Message }
+
+func validateFilterDefinitions(filters []FilterDef) error {
+	for _, f := range filters {
+		if f.constraintError != "" {
+			return &ParamValidationError{Message: "过滤器 " + f.Label + " 定义错误: " + f.constraintError}
+		}
+	}
+	return nil
+}
+
+func validateFilterParams(filters []FilterDef, params map[string]string) error {
+	for _, f := range filters {
+		constraints := FilterConstraints{}
+		if f.Constraints != nil {
+			constraints = *f.Constraints
+		}
+		value, ok := params[f.Name]
+		if !ok || strings.TrimSpace(value) == "" {
+			value = f.Resolved
+		}
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			if constraints.Required {
+				return &ParamValidationError{Message: f.Label + " 为必填项"}
+			}
+			continue
+		}
+		switch f.Type {
+		case "number":
+			n, err := strconv.ParseFloat(trimmed, 64)
+			if err != nil || math.IsNaN(n) || math.IsInf(n, 0) {
+				return &ParamValidationError{Message: f.Label + " 必须是数值"}
+			}
+			if constraints.Min != nil && n < *constraints.Min {
+				return &ParamValidationError{Message: fmt.Sprintf("%s 不能小于 %v", f.Label, *constraints.Min)}
+			}
+			if constraints.Max != nil && n > *constraints.Max {
+				return &ParamValidationError{Message: fmt.Sprintf("%s 不能大于 %v", f.Label, *constraints.Max)}
+			}
+		case "string":
+			length := utf8.RuneCountInString(value)
+			if constraints.MinLength != nil && length < *constraints.MinLength {
+				return &ParamValidationError{Message: fmt.Sprintf("%s 长度不能少于 %d", f.Label, *constraints.MinLength)}
+			}
+			if constraints.MaxLength != nil && length > *constraints.MaxLength {
+				return &ParamValidationError{Message: fmt.Sprintf("%s 长度不能超过 %d", f.Label, *constraints.MaxLength)}
+			}
+		case "date", "time":
+			if sqlDate(trimmed) == "" {
+				return &ParamValidationError{Message: f.Label + " 日期格式不合法"}
+			}
+		case "date_range", "time_range":
+			if sqlDateRange(trimmed) == "" {
+				return &ParamValidationError{Message: f.Label + " 日期范围格式不合法"}
+			}
+		case "enum":
+			if f.optionSQL == "" || f.optionResolved {
+				allowed := make(map[string]bool, len(f.Options))
+				for _, opt := range f.Options {
+					allowed[opt.Value] = true
+				}
+				values := []string{trimmed}
+				if f.Multiple {
+					values = strings.Split(trimmed, ",")
+				}
+				for _, v := range values {
+					if !allowed[strings.TrimSpace(v)] {
+						return &ParamValidationError{Message: f.Label + " 包含无效选项"}
+					}
+				}
+			}
+		}
+	}
+	return nil
 }
 
 func filterDependencies(sql, self string, filters []FilterDef) []string {

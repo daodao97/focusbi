@@ -136,7 +136,7 @@ raw 区块 (原样输出, 适合展示纯文本/已转义内容)：
 - **`@hidden`**: 适合把某个 SQL block 当作复用数据源。该 block 会正常执行、进入脚本引用表,
   但不会渲染到页面。若执行报错, 错误仍会显示出来, 方便排查。
 - **`@merge_cell`**: 层级合并 —— 后列仅当其前置合并列也相同时才合并, 适合月度/分组明细。
-- **`@sql_cache`**: 以 `数据源 + SQL` 为键缓存结果, TTL 内重复执行直接命中, 降低库压力。
+- **`@sql_cache`**: 以 `数据源 + SQL + TTL 策略` 为键缓存结果, TTL 内重复执行直接命中, 降低库压力。
   前端点击"刷新"和自动刷新会旁路缓存取实时数据, 并把新结果回写缓存 (对其他访问者也生效);
   编辑预览、MCP 预览、定时任务执行始终不走缓存。
 - **自动刷新**: 是**报表级**设置 (不是块注解), 在报表编辑器里配置"自动刷新间隔(秒)",
@@ -542,6 +542,26 @@ ${kw|关键词||string}
 ${region|地区||enum_sql(SELECT id AS value, name AS label FROM regions ORDER BY name)}
 ${owner|负责人||enum_sql[crm](SELECT uid AS value, nick AS label FROM users)}
 ```
+
+### 参数约束
+
+在过滤器类型后追加 `;` 和约束列表。约束由服务端执行，公开分享、定时任务、预览和正式运行
+使用同一套规则：
+
+```text
+${age|年龄||number;required,min=1,max=120}
+${name|姓名||string;min_length=2,max_length=40}
+${state|状态||enum(1:启用,0:禁用);required}
+${city|城市||enum_sql(SELECT id, name FROM city);required}
+```
+
+| 约束 | 适用类型 | 含义 |
+|---|---|---|
+| `required` | 全部 | 请求值和默认值均为空时拒绝执行 |
+| `min` / `max` | `number` | 数值上下界（包含边界） |
+| `min_length` / `max_length` | `string` | 字符长度上下界（按 Unicode 字符计数） |
+
+`enum` 会同时校验提交值是否属于候选项；动态 `enum_sql` 仅在选项查询成功时校验候选范围。
 
 - 查询取 **value / label 两列** 作为选项的值与显示文本; 若结果列名含 `value`/`label`
   则按名取, 否则取**前两列** (单列时 value=label)。

@@ -344,6 +344,9 @@ bearer_token_env_var = "FOCUSBI_TOKEN"
 完整报表运行默认总超时为 10 分钟, 可在后台「系统设置」动态修改
 `engine.report_timeout`。客户端取消请求时, SQL、`enum_sql`、脚本查询和脚本 `fetch()` 会同步取消。
 同一次运行内完全相同的 DSN、SQL、参数和缓存策略只执行一次, 各区块获得独立结果副本后再做转换。
+带 `@sql_cache` 的查询在跨请求并发未命中时也只回源一次，避免缓存失效瞬间击穿数据源。
+编辑器可主动运行执行计划检查：MySQL 使用 `EXPLAIN`，PostgreSQL 使用 JSON 格式 `EXPLAIN`，
+SQLite 使用 `EXPLAIN QUERY PLAN`；该检查只处理声明式 SQL，不执行脚本区块。
 
 ## 测试
 

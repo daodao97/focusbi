@@ -138,6 +138,7 @@ export const api = {
   // 执行 / 预览 / AI
   runReport: (id, params, signal) => request('POST', `/report/${id}/run`, { params }, { signal }),
   previewReport: (payload, signal) => request('POST', '/report/preview', payload, { signal }),
+  explainReport: (payload, signal) => request('POST', '/report/explain', payload, { signal }),
   aiModify: (content, instruction, schema, history = []) => request('POST', '/report/ai', { content, instruction, schema, history }),
   aiModifyStream: (content, instruction, schema, history = [], onEvent) =>
     streamRequest('POST', '/report/ai/stream', { content, instruction, schema, history }, onEvent),

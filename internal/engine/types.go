@@ -5,20 +5,32 @@ package engine
 
 // FilterDef 描述一个交互式过滤器, 提供给前端渲染输入控件。
 type FilterDef struct {
-	Name      string    `json:"name"`
-	Label     string    `json:"label"`
-	Type      string    `json:"type"`             // date / date_range / string / number / enum / bool
-	Format    string    `json:"format,omitempty"` // 日期格式 (PHP 风格, 如 Y-m / Y-m-d), 来自 type[...] 后缀
-	Default   string    `json:"default"`          // 原始默认值定义 (如 "-7 days,today")
-	Resolved  string    `json:"resolved"`         // 解析后的默认值 (如 "2026-06-17,2026-06-24"), 供前端回填
-	Options   []EnumOpt `json:"options,omitempty"`
-	Multiple  bool      `json:"multiple,omitempty"` // enum 多选 (值为逗号分隔, SQL 里配合 IN)
-	Truncated bool      `json:"truncated,omitempty"`
-	RowLimit  int       `json:"row_limit,omitempty"`
-	DependsOn []string  `json:"depends_on,omitempty"`
+	Name        string             `json:"name"`
+	Label       string             `json:"label"`
+	Type        string             `json:"type"`             // date / date_range / string / number / enum / bool
+	Format      string             `json:"format,omitempty"` // 日期格式 (PHP 风格, 如 Y-m / Y-m-d), 来自 type[...] 后缀
+	Default     string             `json:"default"`          // 原始默认值定义 (如 "-7 days,today")
+	Resolved    string             `json:"resolved"`         // 解析后的默认值 (如 "2026-06-17,2026-06-24"), 供前端回填
+	Options     []EnumOpt          `json:"options,omitempty"`
+	Multiple    bool               `json:"multiple,omitempty"` // enum 多选 (值为逗号分隔, SQL 里配合 IN)
+	Truncated   bool               `json:"truncated,omitempty"`
+	RowLimit    int                `json:"row_limit,omitempty"`
+	DependsOn   []string           `json:"depends_on,omitempty"`
+	Constraints *FilterConstraints `json:"constraints,omitempty"`
 	// 动态选项: enum_sql 时, 选项由这条 SQL 查询得到 (value/label 两列); 不下发前端。
-	optionSQL string `json:"-"`
-	optionDSN string `json:"-"`
+	optionSQL       string `json:"-"`
+	optionDSN       string `json:"-"`
+	optionResolved  bool   `json:"-"`
+	constraintError string `json:"-"`
+}
+
+// FilterConstraints 是过滤参数的服务端约束。零值表示不限制。
+type FilterConstraints struct {
+	Required  bool     `json:"required,omitempty"`
+	Min       *float64 `json:"min,omitempty"`
+	Max       *float64 `json:"max,omitempty"`
+	MinLength *int     `json:"min_length,omitempty"`
+	MaxLength *int     `json:"max_length,omitempty"`
 }
 
 // EnumOpt 是枚举过滤器的一个候选项。

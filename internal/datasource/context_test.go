@@ -19,6 +19,19 @@ func TestFormatQueryDeadlineError(t *testing.T) {
 	}
 }
 
+func TestExplainPrefix(t *testing.T) {
+	cases := map[string]string{
+		"mysql":    "EXPLAIN ",
+		"postgres": "EXPLAIN (FORMAT JSON) ",
+		"sqlite":   "EXPLAIN QUERY PLAN ",
+	}
+	for driver, want := range cases {
+		if got := explainPrefix(driver); got != want {
+			t.Fatalf("driver=%s prefix=%q, want %q", driver, got, want)
+		}
+	}
+}
+
 func TestFormatDurationCN(t *testing.T) {
 	cases := map[time.Duration]string{
 		3 * time.Minute:  "3分钟",

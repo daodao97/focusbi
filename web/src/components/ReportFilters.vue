@@ -120,7 +120,7 @@ watch(
   <div v-if="filters.length" class="filters">
     <div class="filter-row">
       <div v-for="f in filters" :key="f.name" class="filter-item">
-        <label>{{ f.label }}</label>
+		<label>{{ f.label }}<span v-if="f.constraints?.required" class="required"> *</span></label>
 		<small v-if="f.truncated" class="truncated">选项仅显示前 {{ f.row_limit }} 条</small>
         <el-select
           v-if="f.type === 'enum'"
@@ -155,7 +155,10 @@ watch(
           v-else
           :model-value="modelValue[f.name] || ''"
           @update:model-value="v => set(f.name, v)"
-          :type="f.type === 'number' ? 'number' : 'text'" style="width: 160px" />
+		  :type="f.type === 'number' ? 'number' : 'text'"
+		  :min="f.constraints?.min" :max="f.constraints?.max"
+		  :minlength="f.constraints?.min_length" :maxlength="f.constraints?.max_length"
+		  style="width: 160px" />
       </div>
       <el-button type="primary" :loading="loading" @click="emit('run')">{{ t('query') }}</el-button>
     </div>
@@ -167,6 +170,7 @@ watch(
 .filter-row { display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-end; }
 .filter-item { display: flex; flex-direction: column; gap: 4px; }
 .filter-item label { font-size: 12px; color: var(--el-text-color-secondary); }
+.required { color: var(--el-color-danger); }
 .truncated { color: var(--el-color-warning); font-size: 11px; }
 
 /* 移动端: 控件固定宽 (160~360px) 会超出窗口, 改为每项占满整行, 输入控件随之 100%。 */

@@ -101,9 +101,14 @@ type ValidationIssue struct {
 func Validate(content string) ([]FilterDef, []ValidationIssue) {
 	filters, cleaned := parseFilters(content)
 	resolveDefaults(filters)
+	var issues []ValidationIssue
+	for _, f := range filters {
+		if f.constraintError != "" {
+			issues = append(issues, ValidationIssue{Severity: "error", Message: "过滤器 " + f.Name + ": " + f.constraintError})
+		}
+	}
 	macros := macroValues(filters, nil) // 用默认值展开宏
 
-	var issues []ValidationIssue
 	knownIDs := map[string]bool{}
 	declared := map[string]bool{}
 	for _, f := range filters {
@@ -213,9 +218,17 @@ func (r *Runner) run(content string, params map[string]string) (ret *Result, err
 
 	filters, cleaned := parseFilters(content)
 	resolveDefaults(filters)
+	if err := validateFilterDefinitions(filters); err != nil {
+		return nil, err
+	}
 	r.resolveFilterOptions(filters, params) // enum_sql: 查库填充动态/级联选项
-
 	result := &Result{Filters: filters, Blocks: []Block{}}
+	if err := validateFilterParams(filters, params); err != nil {
+		// 首次打开报表时仍需把过滤器定义返回前端，否则必填项无法填写。
+		// 参数不合法时不执行任何主 SQL，只用错误区块提示用户。
+		result.Blocks = append(result.Blocks, Block{Type: "raw", Error: err.Error()})
+		return result, nil
+	}
 
 	// 解析所有区块一次 (避免装配阶段重复 parse)。
 	parsed := make([]*rawBlock, 0)

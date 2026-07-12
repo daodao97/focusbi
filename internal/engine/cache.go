@@ -10,10 +10,12 @@ import (
 	"time"
 
 	"xproxy/internal/datasource"
+
+	"golang.org/x/sync/singleflight"
 )
 
 // 查询结果缓存 (移植自 dataddy sql_cache):
-// 以 dsn + SQL 为键缓存 datasource.Query 的结果, 在 TTL 内重复执行直接命中,
+// 以 dsn + SQL + 参数 + TTL 策略为键缓存 datasource.Query 的结果, 在 TTL 内重复执行直接命中,
 // 降低数据库压力、加速重查询。仅缓存成功结果; 出错不缓存。
 
 // nowFunc 便于测试覆写时间源。
@@ -37,8 +39,9 @@ var (
 var executeQueryContext = datasource.QueryContext
 
 var (
-	queryCacheMu sync.Mutex
-	queryCache   = map[string]cacheEntry{}
+	queryCacheMu    sync.Mutex
+	queryCache      = map[string]cacheEntry{}
+	queryCacheGroup singleflight.Group
 )
 
 // cacheKey 生成 dsn+sql+args 的稳定键。
@@ -66,7 +69,9 @@ func cachedQueryContext(ctx context.Context, dsn, sql string, ttlSec int, bypass
 	if err != nil {
 		return nil, err
 	}
-	key := cacheKey(identity, sql, args...)
+	// TTL 是缓存策略的一部分。同一 SQL 使用不同 TTL 时不能共享条目，否则短 TTL
+	// 调用方可能持续命中另一个报表写入的长 TTL 数据。
+	key := fmt.Sprintf("%s:ttl=%d", cacheKey(identity, sql, args...), ttlSec)
 	now := nowFunc()
 
 	if !bypass {
@@ -78,21 +83,44 @@ func cachedQueryContext(ctx context.Context, dsn, sql string, ttlSec int, bypass
 		queryCacheMu.Unlock()
 	}
 
-	res, err := executeQueryContext(ctx, dsn, sql, args...)
-	if err != nil {
-		return nil, err
-	}
-	if len(res.Rows) > maxCacheRows {
-		return res, nil // 结果过大不缓存
-	}
+	// 同缓存键、同 TTL 的并发回源只执行一次。共享查询使用独立上下文，单个客户端断开
+	// 只停止自己的等待，不会取消其它请求仍在等待的数据库查询。
+	ch := queryCacheGroup.DoChan(key, func() (any, error) {
+		// 首次查缓存与进入 singleflight 之间可能已有其它回源完成，执行前再检查一次。
+		if !bypass {
+			now := nowFunc()
+			queryCacheMu.Lock()
+			if e, ok := queryCache[key]; ok && now.Before(e.expires) {
+				queryCacheMu.Unlock()
+				return cloneQueryResult(e.res), nil
+			}
+			queryCacheMu.Unlock()
+		}
 
-	queryCacheMu.Lock()
-	pruneExpiredLocked(now)
-	if _, exists := queryCache[key]; exists || len(queryCache) < maxCacheEntries {
-		queryCache[key] = cacheEntry{dsn: normalizedDSNName(dsn), res: cloneQueryResult(res), expires: now.Add(time.Duration(ttlSec) * time.Second)}
+		res, err := executeQueryContext(context.Background(), dsn, sql, args...)
+		if err != nil {
+			return nil, err
+		}
+		if len(res.Rows) <= maxCacheRows {
+			storedAt := nowFunc()
+			queryCacheMu.Lock()
+			pruneExpiredLocked(storedAt)
+			if _, exists := queryCache[key]; exists || len(queryCache) < maxCacheEntries {
+				queryCache[key] = cacheEntry{dsn: normalizedDSNName(dsn), res: cloneQueryResult(res), expires: storedAt.Add(time.Duration(ttlSec) * time.Second)}
+			}
+			queryCacheMu.Unlock()
+		}
+		return res, nil
+	})
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case result := <-ch:
+		if result.Err != nil {
+			return nil, result.Err
+		}
+		return cloneQueryResult(result.Val.(*datasource.QueryResult)), nil
 	}
-	queryCacheMu.Unlock()
-	return res, nil
 }
 
 // InvalidateQueryCache 清理某个数据源在当前进程的全部查询结果缓存。

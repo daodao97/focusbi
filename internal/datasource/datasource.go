@@ -39,6 +39,35 @@ func CacheIdentity(name string) (string, error) {
 	return hex.EncodeToString(h[:]), nil
 }
 
+// Driver 返回数据源归一化后的 database/sql 驱动名。
+func Driver(name string) (string, error) {
+	driver, _, _, err := resolve(name)
+	if err != nil {
+		return "", err
+	}
+	return normalizeDriver(driver), nil
+}
+
+// ExplainContext 返回只读查询的执行计划。调用方负责先校验 query 为只读 SQL。
+func ExplainContext(ctx context.Context, name, query string) (*QueryResult, error) {
+	driver, err := Driver(name)
+	if err != nil {
+		return nil, err
+	}
+	return QueryContext(ctx, name, explainPrefix(driver)+query)
+}
+
+func explainPrefix(driver string) string {
+	switch driver {
+	case "postgres":
+		return "EXPLAIN (FORMAT JSON) "
+	case "sqlite":
+		return "EXPLAIN QUERY PLAN "
+	default:
+		return "EXPLAIN "
+	}
+}
+
 // normalizeDriver 把用户填写的驱动名归一化为 database/sql 注册的驱动名。
 //
 //	mysql                       -> mysql

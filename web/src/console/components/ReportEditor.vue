@@ -37,6 +37,10 @@ const params = ref({})
 const preview = ref(null)
 const previewing = ref(false)
 let previewController
+const explainLoading = ref(false)
+const explainOpen = ref(false)
+const explainPlans = ref([])
+let explainController
 const loading = ref(true) // 初次加载报表数据时的整体过渡 (默认 true, load 完成置 false)
 const mode = ref('edit') // edit | preview
 const docOpen = ref(false)
@@ -141,6 +145,22 @@ async function rerun() {
 
 function cancelPreview() { mode.value = 'edit' }
 
+async function explainReport() {
+	if (explainController) explainController.abort()
+	const controller = new AbortController()
+	explainController = controller
+	explainLoading.value = true
+	try {
+		explainPlans.value = await api.explainReport({ dsn: report.dsn, content: report.content, params: params.value }, controller.signal)
+		explainOpen.value = true
+	} catch (e) {
+		if (e.name === 'AbortError') return
+		ElMessage.error(e.message)
+	} finally {
+		if (explainController === controller) explainLoading.value = false
+	}
+}
+
 // 保存 = 存开发版草稿 (dev_content), 不影响线上发布版。
 // silent=true 时不 emit/不提示 (供 publish 内部复用)。
 async function save(silent = false) {
@@ -237,6 +257,7 @@ defineExpose({ save, reload: load })
         </el-button>
         <el-button v-if="report.id" text @click="versionOpen = true">历史版本</el-button>
         <template v-if="mode === 'edit'">
+		  <el-button :loading="explainLoading" @click="explainReport">执行计划</el-button>
           <el-button :loading="previewing" @click="doPreview">预览</el-button>
           <el-button :type="draftDirty ? 'warning' : ''" :disabled="!draftDirty || !nameValid" @click="save">保存</el-button>
           <el-tooltip :content="publishHint" :disabled="!publishHint" placement="top">
@@ -262,6 +283,18 @@ defineExpose({ save, reload: load })
 
     <DocDrawer v-model="docOpen" />
     <VersionDrawer v-model="versionOpen" :report-id="report.id" @rollback="onRollback" />
+
+	<el-dialog v-model="explainOpen" title="SQL 执行计划" width="900px" append-to-body>
+	  <el-empty v-if="!explainPlans.length" description="模板中没有可检查的 SQL 区块" />
+	  <div v-for="plan in explainPlans" :key="`${plan.block_index}:${plan.block_id}`" class="explain-block">
+		<div class="explain-title">区块 {{ plan.block_index }}<span v-if="plan.block_id"> · {{ plan.block_id }}</span> · {{ plan.dsn }}</div>
+		<el-alert v-if="plan.error" type="error" :closable="false" :title="plan.error" />
+		<el-table v-else :data="plan.rows || []" size="small" border max-height="320">
+		  <el-table-column v-for="column in plan.columns || []" :key="column" :prop="column" :label="column" min-width="140" show-overflow-tooltip />
+		</el-table>
+	  </div>
+	  <template #footer><el-button @click="explainOpen = false">关闭</el-button></template>
+	</el-dialog>
 
     <!-- 编辑模式: 编辑器 + AI 面板 -->
     <el-row v-show="mode === 'edit' && !loading" :gutter="16" class="edit-row">
@@ -356,6 +389,8 @@ defineExpose({ save, reload: load })
 
 .meta { display: flex; gap: 12px; margin-bottom: 12px; flex: none; align-items: center; }
 .form-hint { font-size: 12px; color: var(--el-text-color-secondary); line-height: 1.5; margin-top: 4px; }
+.explain-block + .explain-block { margin-top: 20px; }
+.explain-title { font-weight: 600; margin-bottom: 8px; }
 /* 报表名为空时高亮输入框边框 */
 .name-error :deep(.el-input__wrapper) { box-shadow: 0 0 0 1px var(--el-color-danger) inset; }
 .editor-fill { flex: 1; min-height: 0; }

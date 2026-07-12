@@ -82,7 +82,7 @@ func publicRunReport(c *gin.Context) {
 		WithAuthz(engine.AllowlistAuthz(settings.ApprovedDSNs)).
 		RunContext(reportCtx, r.Content, req.Params)
 	if err != nil {
-		fail(c, http.StatusInternalServerError, err.Error())
+		failReportRun(c, err)
 		return
 	}
 	result.AutoRefresh = settings.AutoRefresh       // 报表级自动刷新

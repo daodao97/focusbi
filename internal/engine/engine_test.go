@@ -1,9 +1,12 @@
 package engine
 
 import (
+	"context"
 	"regexp"
 	"strings"
 	"testing"
+
+	"xproxy/internal/datasource"
 )
 
 func TestParseFilters(t *testing.T) {
@@ -748,6 +751,76 @@ func TestParseFilterBodyEnumSQL(t *testing.T) {
 	}
 	if f.optionSQL == "" {
 		t.Errorf("optionSQL 未填充: %+v", f)
+	}
+}
+
+func TestFilterConstraints(t *testing.T) {
+	f := parseFilterBody("age|年龄||number;required,min=1,max=120")
+	if f.constraintError != "" || f.Constraints == nil || !f.Constraints.Required || f.Constraints.Min == nil || *f.Constraints.Min != 1 || f.Constraints.Max == nil || *f.Constraints.Max != 120 {
+		t.Fatalf("数值约束解析失败: %+v err=%q", f.Constraints, f.constraintError)
+	}
+	name := parseFilterBody("name|姓名||string;min_length=2,max_length=4")
+	if name.constraintError != "" || name.Constraints == nil || name.Constraints.MinLength == nil || *name.Constraints.MinLength != 2 {
+		t.Fatalf("长度约束解析失败: %+v err=%q", name.Constraints, name.constraintError)
+	}
+	dyn := parseFilterBody("city|城市||enum_sql(SELECT id, name FROM city);required")
+	if dyn.optionSQL == "" || dyn.Constraints == nil || !dyn.Constraints.Required {
+		t.Fatalf("enum_sql 约束解析失败: %+v", dyn)
+	}
+	bad := parseFilterBody("name|姓名||string;min=1")
+	if bad.constraintError == "" {
+		t.Fatal("string 使用 min 应报告定义错误")
+	}
+	badDynamic := parseFilterBody("city|城市||enum_sql(SELECT id FROM city);unknown=1")
+	if badDynamic.optionSQL == "" || badDynamic.constraintError == "" {
+		t.Fatalf("enum_sql 未知约束应保留类型并报告错误: %+v", badDynamic)
+	}
+}
+
+func TestValidateFilterParams(t *testing.T) {
+	filters, _ := parseFilters(`${age|年龄||number;required,min=1,max=120}
+${name|姓名||string;min_length=2,max_length=4}
+${state|状态||enum(1:启用,0:禁用);required}`)
+	resolveDefaults(filters)
+	valid := map[string]string{"age": "18", "name": "张三", "state": "1"}
+	if err := validateFilterParams(filters, valid); err != nil {
+		t.Fatalf("合法参数被拒绝: %v", err)
+	}
+	for _, params := range []map[string]string{
+		{"name": "张三", "state": "1"},
+		{"age": "121", "name": "张三", "state": "1"},
+		{"age": "18", "name": "张三丰赵五", "state": "1"},
+		{"age": "18", "name": "张三", "state": "2"},
+	} {
+		if err := validateFilterParams(filters, params); err == nil {
+			t.Fatalf("非法参数应被拒绝: %+v", params)
+		}
+	}
+}
+
+func TestRunRejectsInvalidFilterConstraintDefinition(t *testing.T) {
+	_, err := NewRunner("default").Run(`${name|姓名||string;min=1}
+SELECT 1;`, nil)
+	if err == nil || !strings.Contains(err.Error(), "定义错误") {
+		t.Fatalf("非法约束定义应在执行前被拒绝: %v", err)
+	}
+}
+
+func TestRunReturnsFiltersWithoutQueryWhenRequiredParamMissing(t *testing.T) {
+	original := executeQueryContext
+	defer func() { executeQueryContext = original }()
+	called := false
+	executeQueryContext = func(context.Context, string, string, ...any) (*datasource.QueryResult, error) {
+		called = true
+		return nil, nil
+	}
+	result, err := NewRunner("default").Run(`${age|年龄||number;required,min=1}
+SELECT {age};`, nil)
+	if err != nil || len(result.Filters) != 1 || len(result.Blocks) != 1 || !strings.Contains(result.Blocks[0].Error, "必填") {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+	if called {
+		t.Fatal("缺少必填参数时不应执行主查询")
 	}
 }
 

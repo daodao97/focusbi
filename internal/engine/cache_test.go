@@ -1,11 +1,75 @@
 package engine
 
 import (
+	"context"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"xproxy/internal/datasource"
 )
+
+func TestCachedQueryPreventsCrossRequestStampede(t *testing.T) {
+	resetQueryCacheForTest()
+	setupSQLiteDefault(t)
+	original := executeQueryContext
+	defer func() { executeQueryContext = original }()
+	var calls atomic.Int32
+	release := make(chan struct{})
+	executeQueryContext = func(context.Context, string, string, ...any) (*datasource.QueryResult, error) {
+		calls.Add(1)
+		<-release
+		return &datasource.QueryResult{Columns: []string{"n"}, Rows: []map[string]any{{"n": 1}}}, nil
+	}
+
+	const workers = 12
+	var wg sync.WaitGroup
+	wg.Add(workers)
+	errs := make(chan error, workers)
+	for i := 0; i < workers; i++ {
+		go func() {
+			defer wg.Done()
+			_, err := cachedQueryContext(context.Background(), "default", "SELECT 42", 60, false)
+			errs <- err
+		}()
+	}
+	for calls.Load() == 0 {
+		time.Sleep(time.Millisecond)
+	}
+	time.Sleep(20 * time.Millisecond)
+	close(release)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("cachedQueryContext: %v", err)
+		}
+	}
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("并发缓存未命中回源次数=%d, want 1", got)
+	}
+}
+
+func TestCachedQuerySeparatesDifferentTTLPolicies(t *testing.T) {
+	resetQueryCacheForTest()
+	setupSQLiteDefault(t)
+	original := executeQueryContext
+	defer func() { executeQueryContext = original }()
+	var calls atomic.Int32
+	executeQueryContext = func(context.Context, string, string, ...any) (*datasource.QueryResult, error) {
+		calls.Add(1)
+		return &datasource.QueryResult{Columns: []string{"n"}, Rows: []map[string]any{{"n": 1}}}, nil
+	}
+	for _, ttl := range []int{60, 60, 1, 1} {
+		if _, err := cachedQueryContext(context.Background(), "default", "SELECT 7", ttl, false); err != nil {
+			t.Fatalf("ttl=%d: %v", ttl, err)
+		}
+	}
+	if got := calls.Load(); got != 2 {
+		t.Fatalf("不同 TTL 应各自回源一次, got %d", got)
+	}
+}
 
 func resetQueryCacheForTest() {
 	queryCacheMu.Lock()

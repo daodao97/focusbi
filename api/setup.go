@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"sort"
@@ -85,6 +86,7 @@ func Setup(e *gin.Engine) {
 		authed.POST("/report/:id/version/:vid/rollback", writer, rollbackReport)
 		authed.POST("/report/:id/run", runReport)
 		authed.POST("/report/preview", writer, previewReport)
+		authed.POST("/report/explain", writer, explainReport)
 		authed.POST("/report/ai", writer, aiModify)
 		authed.POST("/report/ai/stream", writer, aiModifyStream)
 		// 分享开关 / 侧边菜单可见性: handler 内按 report.{id}:w 判权
@@ -143,6 +145,15 @@ func fail(c *gin.Context, status int, msg string) {
 		msg = "服务器内部错误, 请稍后重试"
 	}
 	c.JSON(status, gin.H{"code": 1, "msg": msg})
+}
+
+func failReportRun(c *gin.Context, err error) {
+	var paramErr *engine.ParamValidationError
+	if errors.As(err, &paramErr) {
+		fail(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	fail(c, http.StatusInternalServerError, err.Error())
 }
 
 func paramID(c *gin.Context) (int, bool) {
@@ -609,7 +620,11 @@ func publishReport(c *gin.Context) {
 		var validationErrors []string
 		for _, issue := range validationIssues {
 			if issue.Severity == "error" {
-				validationErrors = append(validationErrors, fmt.Sprintf("区块 %d: %s", issue.BlockIndex, issue.Message))
+				prefix := ""
+				if issue.BlockIndex > 0 {
+					prefix = fmt.Sprintf("区块 %d: ", issue.BlockIndex)
+				}
+				validationErrors = append(validationErrors, prefix+issue.Message)
 			}
 		}
 		if len(validationErrors) > 0 {
@@ -876,7 +891,7 @@ func runReport(c *gin.Context) {
 		WithTrace(reportRunTrace(c, id, r.Name, noCache)).
 		RunContext(c.Request.Context(), r.Content, req.Params)
 	if err != nil {
-		fail(c, http.StatusInternalServerError, err.Error())
+		failReportRun(c, err)
 		return
 	}
 	settings := r.ParseSettings()
@@ -977,10 +992,25 @@ func previewReport(c *gin.Context) {
 	// 预览始终取实时数据, 旁路缓存; 同样按调用者权限校验数据源。
 	result, err := engine.NewRunner(req.DSN).WithNoCache(true).WithAuthz(dsnAuthzOf(c)).RunContext(c.Request.Context(), req.Content, req.Params)
 	if err != nil {
-		fail(c, http.StatusInternalServerError, err.Error())
+		failReportRun(c, err)
 		return
 	}
 	ok(c, result)
+}
+
+// explainReport 对编辑器中的声明式 SQL 执行方言对应的 EXPLAIN，不执行报表脚本。
+func explainReport(c *gin.Context) {
+	var req previewRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		fail(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	plans, err := engine.NewRunner(req.DSN).WithAuthz(dsnAuthzOf(c)).ExplainContext(c.Request.Context(), req.Content, req.Params)
+	if err != nil {
+		failReportRun(c, err)
+		return
+	}
+	ok(c, plans)
 }
 
 // ---- AI ----

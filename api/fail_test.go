@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"xproxy/internal/engine"
+
 	"github.com/gin-gonic/gin"
 )
 
@@ -47,5 +49,14 @@ func TestFailMasksInternalError(t *testing.T) {
 	}
 	if got := msgOf(http.StatusForbidden, "无权修改该报表", false); got != "无权修改该报表" {
 		t.Errorf("403 提示应原样返回, got %q", got)
+	}
+}
+
+func TestFailReportRunTreatsParamValidationAsBadRequest(t *testing.T) {
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	failReportRun(c, &engine.ParamValidationError{Message: "年龄不能小于 1"})
+	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "参数校验失败") {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
 	}
 }
