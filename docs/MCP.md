@@ -92,6 +92,10 @@ bearer_token_env_var = "FOCUSBI_TOKEN"
 | `create_report` | 创建报表或文件夹; 报表内容只进入开发版草稿, 查看页生效还要 `publish_report` | 父级写 / 根建需全局 `report:w` |
 | `update_report` | 更新报表的开发版草稿 / 名称 / 数据源 / 设置; 查看页仍显示旧发布版 | 该报表写 |
 | `publish_report` | 把开发版草稿发布为正式版 (并记录版本快照); 创建/更新后要让查看页生效必须调用它 | 该报表写 |
+| `list_schedules` / `get_schedule` | 列出或读取定时任务配置; 列表中的 Webhook 会脱敏 | 该报表写 |
+| `create_schedule` | 为已发布报表创建定时任务, 支持预置参数、只跑不推、Webhook 和阈值告警 | 该报表写 + 数据源读 |
+| `update_schedule` / `delete_schedule` | 局部更新或删除定时任务 | 该报表写 (更新另需数据源读) |
+| `test_schedule` | 立即执行一次任务验证配置; Webhook 任务会向真实群机器人推送 | 该报表写 + 数据源读 |
 
 还提供一个资源 `focusbi://syntax` (同 `get_syntax_doc`, 资源形式)。
 
@@ -106,6 +110,8 @@ bearer_token_env_var = "FOCUSBI_TOKEN"
    用 `preview_template` 试跑, 按返回的区块错误自动修。
 4. **落库发布**: "没问题, 创建并发布" → `create_report` + `publish_report`。
    如果是修改已有报表, 则是 `update_report` + `publish_report`。
+5. **配置定时任务**: "每天 9 点用 limit=1000 跑这张报表并推送飞书" →
+   `create_schedule`; 修改前可用 `list_schedules` / `get_schedule` 查看现有配置。
 
 发布后报表即对有权限的查看者可见, 也能配定时任务。
 

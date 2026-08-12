@@ -50,6 +50,12 @@ func setupTestDB(t *testing.T) {
 			remark TEXT, ssh_enabled INTEGER DEFAULT 0, ssh_host TEXT, ssh_port INTEGER DEFAULT 22,
 			ssh_user TEXT, ssh_auth TEXT, ssh_password TEXT, ssh_key TEXT, ssh_key_passphrase TEXT,
 			created_at DATETIME, updated_at DATETIME)`,
+		`DROP TABLE IF EXISTS report_schedule`,
+		`CREATE TABLE report_schedule(id INTEGER PRIMARY KEY AUTOINCREMENT, report_id INTEGER NOT NULL,
+			name TEXT DEFAULT '', cron TEXT NOT NULL, action TEXT DEFAULT 'webhook', channel TEXT DEFAULT 'lark',
+			webhook TEXT DEFAULT '', params TEXT, trigger_cond TEXT, enabled INTEGER DEFAULT 1,
+			last_run_at DATETIME, last_alarm_at DATETIME, last_status TEXT DEFAULT '',
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP)`,
 		`DROP TABLE IF EXISTS biz`,
 		`CREATE TABLE biz(day TEXT, amount INTEGER)`,
 		`INSERT INTO biz VALUES('2026-06-24', 100), ('2026-06-25', 200)`,
@@ -63,6 +69,7 @@ func setupTestDB(t *testing.T) {
 	dao.Dsn = xdb.New("dsn")
 	dao.User = xdb.New("user")
 	dao.Role = xdb.New("role")
+	dao.Schedule = xdb.New("report_schedule")
 }
 
 // ctxWithPerm 构造一个带指定权限的调用上下文, 权限仍通过真实 role 记录编译。
@@ -356,5 +363,100 @@ func TestSyntaxDocReturned(t *testing.T) {
 	}
 	if !strings.Contains(out.Markdown, "报表模板") {
 		t.Fatal("应返回语法文档内容")
+	}
+}
+
+func TestScheduleToolsCRUDAndExecute(t *testing.T) {
+	setupTestDB(t)
+	ctx := ctxWithPerm(t, map[string]string{"report": "Rrw", "dsn": "r"})
+
+	// 定时任务始终使用已发布版; 直接创建一张带发布内容的报表。
+	reportID, err := dao.CreateReport(&dao.ReportRecord{
+		Name: "销售日报", Type: "report", DSN: "default", Content: "SELECT day, amount FROM biz;",
+	})
+	if err != nil {
+		t.Fatalf("create report: %v", err)
+	}
+	enabled := true
+	_, created, err := createScheduleTool(ctx, nil, createScheduleIn{
+		ReportID: int(reportID), Name: "每日预热", Cron: "0 9 * * *", Action: dao.ActionNone,
+		Webhook: "https://open.feishu.cn/open-apis/bot/v2/hook/abcdef123456",
+		Params:  map[string]string{"execute": "0", "limit": "1000"}, Enabled: &enabled,
+	})
+	if err != nil {
+		t.Fatalf("create_schedule: %v", err)
+	}
+	if created.ID <= 0 {
+		t.Fatalf("create_schedule id=%d", created.ID)
+	}
+
+	_, got, err := getScheduleTool(ctx, nil, scheduleIDIn{ID: created.ID})
+	if err != nil {
+		t.Fatalf("get_schedule: %v", err)
+	}
+	if got.Schedule.Params["limit"] != "1000" || got.Schedule.Cron != "0 9 * * *" {
+		t.Fatalf("任务配置未正确保存: %+v", got.Schedule)
+	}
+	if got.Schedule.Webhook != "https://open.feishu.cn/open-apis/bot/v2/hook/abcdef123456" {
+		t.Fatalf("get_schedule 应返回完整 webhook, got %q", got.Schedule.Webhook)
+	}
+
+	name := "更新后的预热"
+	disabled := false
+	_, updated, err := updateScheduleTool(ctx, nil, updateScheduleIn{
+		ID: created.ID, Name: &name, Enabled: &disabled,
+	})
+	if err != nil || !updated.OK {
+		t.Fatalf("update_schedule: out=%+v err=%v", updated, err)
+	}
+	_, got, _ = getScheduleTool(ctx, nil, scheduleIDIn{ID: created.ID})
+	if got.Schedule.Name != name || got.Schedule.Enabled || got.Schedule.Cron != "0 9 * * *" || got.Schedule.Params["execute"] != "0" {
+		t.Fatalf("局部更新不应覆盖未传字段: %+v", got.Schedule)
+	}
+
+	_, listed, err := listSchedulesTool(ctx, nil, listSchedulesIn{ReportID: int(reportID)})
+	if err != nil || len(listed.Schedules) != 1 {
+		t.Fatalf("list_schedules: count=%d err=%v", len(listed.Schedules), err)
+	}
+	if listed.Schedules[0].Webhook != "****123456" {
+		t.Fatalf("list_schedules 应脱敏 webhook, got %q", listed.Schedules[0].Webhook)
+	}
+
+	// action=none 不访问外部 Webhook, 可验证后台确实执行已发布模板及预置参数链路。
+	_, tested, err := testScheduleTool(ctx, nil, scheduleIDIn{ID: created.ID})
+	if err != nil || !tested.OK || !tested.Triggered {
+		t.Fatalf("test_schedule: out=%+v err=%v", tested, err)
+	}
+
+	_, deleted, err := deleteScheduleTool(ctx, nil, scheduleIDIn{ID: created.ID})
+	if err != nil || !deleted.OK {
+		t.Fatalf("delete_schedule: out=%+v err=%v", deleted, err)
+	}
+}
+
+func TestScheduleToolsRespectReportPermission(t *testing.T) {
+	setupTestDB(t)
+	owner := ctxWithPerm(t, map[string]string{"report": "Rrw", "dsn": "r"})
+	reportID, err := dao.CreateReport(&dao.ReportRecord{Name: "私有报表", Type: "report", DSN: "default", Content: "SELECT 1;"})
+	if err != nil {
+		t.Fatalf("create report: %v", err)
+	}
+	_, created, err := createScheduleTool(owner, nil, createScheduleIn{
+		ReportID: int(reportID), Cron: "0 9 * * *", Action: dao.ActionNone,
+	})
+	if err != nil {
+		t.Fatalf("seed schedule: %v", err)
+	}
+
+	unauthorized := ctxWithPerm(t, map[string]string{"dsn": "r"})
+	if _, _, err := getScheduleTool(unauthorized, nil, scheduleIDIn{ID: created.ID}); err == nil {
+		t.Fatal("无报表写权限不应读取完整任务配置")
+	}
+	_, list, err := listSchedulesTool(unauthorized, nil, listSchedulesIn{})
+	if err != nil {
+		t.Fatalf("list_schedules: %v", err)
+	}
+	if len(list.Schedules) != 0 {
+		t.Fatalf("无权任务不应出现在列表中: %+v", list.Schedules)
 	}
 }

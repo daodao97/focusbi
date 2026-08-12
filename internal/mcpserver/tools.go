@@ -162,6 +162,10 @@ type publishIn struct {
 
 // registerTools 把所有报表开发工具注册到 server。
 func registerTools(s *mcp.Server) {
+	closedWorld := false
+	nonDestructive := false
+	destructive := true
+	openWorld := true
 	mcp.AddTool(s, &mcp.Tool{Name: "get_syntax_doc",
 		Description: "获取报表模板语法的完整权威说明; 编写/修改模板前应先读它。"},
 		getSyntaxDoc)
@@ -209,6 +213,30 @@ func registerTools(s *mcp.Server) {
 	mcp.AddTool(s, &mcp.Tool{Name: "publish_report",
 		Description: "把开发版草稿发布为正式版 (查看页、查看者与定时任务据此); 同时记录一个版本快照。create_report/update_report 后要让查看页生效就调用本工具。需对该报表有写权限。"},
 		publishReportTool)
+
+	mcp.AddTool(s, &mcp.Tool{Name: "list_schedules", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true, OpenWorldHint: &closedWorld},
+		Description: "列出当前用户有权管理的定时任务; 可按 report_id 筛选。Webhook 仅返回脱敏值。需对应报表写权限。"},
+		listSchedulesTool)
+
+	mcp.AddTool(s, &mcp.Tool{Name: "get_schedule", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true, OpenWorldHint: &closedWorld},
+		Description: "读取单个定时任务的完整配置 (含完整 Webhook)。需对应报表写权限。"},
+		getScheduleTool)
+
+	mcp.AddTool(s, &mcp.Tool{Name: "create_schedule", Annotations: &mcp.ToolAnnotations{DestructiveHint: &nonDestructive, OpenWorldHint: &closedWorld},
+		Description: "为已发布报表创建定时任务, 支持预置执行参数、只跑不推、Webhook 推送和阈值告警。需对应报表写权限及报表所用数据源权限。"},
+		createScheduleTool)
+
+	mcp.AddTool(s, &mcp.Tool{Name: "update_schedule", Annotations: &mcp.ToolAnnotations{DestructiveHint: &destructive, OpenWorldHint: &closedWorld},
+		Description: "局部更新定时任务配置; 只修改传入字段。需对应报表写权限及报表所用数据源权限。"},
+		updateScheduleTool)
+
+	mcp.AddTool(s, &mcp.Tool{Name: "delete_schedule", Annotations: &mcp.ToolAnnotations{DestructiveHint: &destructive, IdempotentHint: true, OpenWorldHint: &closedWorld},
+		Description: "删除一个定时任务。需对应报表写权限。"},
+		deleteScheduleTool)
+
+	mcp.AddTool(s, &mcp.Tool{Name: "test_schedule", Annotations: &mcp.ToolAnnotations{DestructiveHint: &destructive, OpenWorldHint: &openWorld},
+		Description: "立即执行一次定时任务以验证配置; webhook 动作会立即向真实群机器人推送消息。需对应报表写权限及报表所用数据源权限。"},
+		testScheduleTool)
 }
 
 // ---- handler 实现 ----
