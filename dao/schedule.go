@@ -26,7 +26,7 @@ type ScheduleRecord struct {
 	Action      string             `json:"action"`              // none 只跑不推 / webhook 推群机器人
 	Channel     string             `json:"channel"`             // lark / wework
 	Webhook     string             `json:"webhook"`             // 群机器人 webhook 完整地址
-	Params      map[string]string  `json:"params"`              // 固定过滤参数
+	Params      map[string]string  `json:"params"`              // 预置执行参数 (过滤器及任意 URL query 参数)
 	Condition   *ScheduleCondition `json:"condition,omitempty"` // 触发条件; nil=定时推送
 	Enabled     bool               `json:"enabled"`
 	LastRunAt   *time.Time         `json:"last_run_at,omitempty"`

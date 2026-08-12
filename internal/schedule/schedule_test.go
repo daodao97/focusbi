@@ -80,6 +80,20 @@ func TestRenderTextNoLink(t *testing.T) {
 	}
 }
 
+func TestQueryString(t *testing.T) {
+	params := map[string]string{
+		"execute":  "0",
+		"limit":    "1000",
+		"店铺":       "上海 & 杭州",
+		"_nocache": "1",
+	}
+	got := queryString(params)
+	want := "execute=0&limit=1000&%E5%BA%97%E9%93%BA=%E4%B8%8A%E6%B5%B7+%26+%E6%9D%AD%E5%B7%9E"
+	if got != want {
+		t.Fatalf("query 编码错误: got %q, want %q", got, want)
+	}
+}
+
 // HTTP 路径测试用 postJSON + httptest (localhost 合法; SSRF 校验是针对用户填的 URL,
 // 在 push() 层, 这里单测网络/payload 路径)。
 func TestPushPayload(t *testing.T) {

@@ -48,6 +48,7 @@ const blank = () => ({
 })
 const form = reactive(blank())
 const saving = ref(false)
+const queryParams = ref('')       // 未声明为过滤器的预置执行参数 (URL query 格式)
 const localFilters = ref([])       // 选报表模式下动态拉取的 filters
 const blocks = ref([])             // 报表区块 (用于条件的区块/列下拉)
 const visible = computed({ get: () => props.modelValue, set: v => emit('update:modelValue', v) })
@@ -60,17 +61,46 @@ const condColumns = computed(() => {
   return (b && b.columns) || []
 })
 
+// 已声明过滤器继续使用可视化控件; 其余参数以 query 形式编辑。
+// 支持直接粘贴 `execute=0&limit=1000`、`?execute=0...` 或完整报表 URL。
+function applySavedParams(saved) {
+  const names = new Set((effectiveFilters.value || []).map(f => f.name))
+  const filters = {}
+  const extra = new URLSearchParams()
+  for (const [key, value] of Object.entries(saved || {})) {
+    if (names.has(key)) filters[key] = String(value ?? '')
+    else if (key) extra.set(key, String(value ?? ''))
+  }
+  form.params = filters
+  queryParams.value = extra.toString()
+}
+
+function parseQueryParams(input) {
+  let raw = String(input || '').trim()
+  const question = raw.lastIndexOf('?')
+  if (question >= 0) raw = raw.slice(question + 1)
+  raw = raw.replace(/^[?#&]+/, '')
+  const params = {}
+  for (const [key, value] of new URLSearchParams(raw).entries()) {
+    if (key) params[key] = value
+  }
+  return params
+}
+
 // 打开时按 edit 初始化
 watch(() => props.modelValue, async (open) => {
   if (!open) return
   blocks.value = []
+  queryParams.value = ''
+  let savedParams = {}
   if (props.edit) {
     // 列表里的 webhook 是脱敏值; 拉取单条任务取明文回填, 失败则留空 (留空保留原地址)
-    Object.assign(form, blank(), props.edit, { params: { ...(props.edit.params || {}) } })
+    Object.assign(form, blank(), props.edit, { params: {} })
+    savedParams = { ...(props.edit.params || {}) }
     try {
       const full = await api.getSchedule(props.edit.report_id, props.edit.id)
       form.webhook = full.webhook || ''
-      if (full.params) form.params = { ...full.params }
+      if (full.params) savedParams = { ...full.params }
       if (full.condition && full.condition.column) {
         form.alarm = true
         form.condition = { block: '', agg: 'any', op: '<', value: '', silence_minutes: 0, ...full.condition }
@@ -82,10 +112,11 @@ watch(() => props.modelValue, async (open) => {
     Object.assign(form, blank())
   }
   if (props.selectable) {
-    if (form.report_id) loadPreview(form.report_id)
+    if (form.report_id) await loadPreview(form.report_id)
   } else {
-    loadPreviewContent(props.content, props.dsn)
+    await loadPreviewContent(props.content, props.dsn)
   }
+  applySavedParams(savedParams)
 })
 
 // 选报表模式: 选定报表后拉其 filters + blocks (复用 preview 接口解析模板)
@@ -110,6 +141,7 @@ async function loadPreviewContent(content, dsn) {
 function onPickReport(rid) {
   form.report_id = rid
   form.params = {}
+  queryParams.value = ''
   form.condition = { block: '', column: '', agg: 'any', op: '<', value: '', silence_minutes: 0 }
   loadPreview(rid)
 }
@@ -131,7 +163,9 @@ async function submit() {
     const condition = (form.action !== 'none' && form.alarm)
       ? { block: form.condition.block, column: form.condition.column, agg: form.condition.agg, op: form.condition.op, value: String(form.condition.value), silence_minutes: Number(form.condition.silence_minutes) || 0 }
       : null
-    const body = { name: form.name, cron: form.cron, action: form.action, channel: form.channel, webhook: form.webhook, params: form.params, enabled: form.enabled, condition }
+    // query 中可配置任意预置参数; 声明过的过滤器由上方控件覆盖同名值。
+    const params = { ...parseQueryParams(queryParams.value), ...form.params }
+    const body = { name: form.name, cron: form.cron, action: form.action, channel: form.channel, webhook: form.webhook, params, enabled: form.enabled, condition }
     if (form.id) await api.updateSchedule(rid, form.id, body)
     else await api.createSchedule(rid, body)
     ElMessage.success('已保存')
@@ -189,6 +223,11 @@ async function submit() {
       <el-form-item v-if="effectiveFilters.length" label="固定参数">
         <ReportFilters v-model="form.params" :filters="effectiveFilters" />
         <div class="form-hint">任务按这些参数跑报表; 留默认即按过滤器默认值。</div>
+      </el-form-item>
+      <el-form-item label="预置参数">
+        <el-input v-model="queryParams" type="textarea" :rows="2"
+          placeholder="execute=0&limit=1000（也可粘贴完整报表 URL）" />
+        <div class="form-hint">按 URL query 格式填写。后台执行和推送中的查看链接都会携带这些参数。</div>
       </el-form-item>
       <el-form-item v-if="form.action !== 'none'" label="触发条件">
         <el-switch v-model="form.alarm" active-text="仅满足条件时推送" inline-prompt />

@@ -3,6 +3,7 @@ package schedule
 import (
 	"errors"
 	"fmt"
+	"net/url"
 	"strings"
 	"time"
 
@@ -101,20 +102,21 @@ func viewURL(report *dao.ReportRecord, sub *dao.ScheduleRecord) string {
 		}
 		return u
 	}
-	return fmt.Sprintf("%s/#/reports/%d", base, report.Id)
+	u := fmt.Sprintf("%s/#/reports/%d", base, report.Id)
+	if q := queryString(sub.Params); q != "" {
+		u += "?" + q
+	}
+	return u
 }
 
-// queryString 把固定参数拼成 url query (简单编码, 仅用于展示链接)。
+// queryString 把预置执行参数编码成 URL query, 用于推送中的查看链接。
 func queryString(params map[string]string) string {
-	if len(params) == 0 {
-		return ""
-	}
-	var parts []string
+	values := url.Values{}
 	for k, v := range params {
 		if strings.HasPrefix(k, "_") { // 跳过内部参数 (如 _nocache)
 			continue
 		}
-		parts = append(parts, k+"="+v)
+		values.Set(k, v)
 	}
-	return strings.Join(parts, "&")
+	return values.Encode()
 }
