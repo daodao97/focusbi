@@ -36,7 +36,7 @@ type createScheduleIn struct {
 	ReportID  int                    `json:"report_id" jsonschema:"报表 id"`
 	Name      string                 `json:"name,omitempty" jsonschema:"任务名称"`
 	Cron      string                 `json:"cron" jsonschema:"标准 5 段 cron: 分 时 日 月 周"`
-	Action    string                 `json:"action,omitempty" jsonschema:"webhook=推送群机器人; none=只跑不推; 默认 webhook"`
+	Action    string                 `json:"action,omitempty" jsonschema:"推送动作: webhook 表示推送群机器人; none 表示只跑不推; 默认 webhook"`
 	Channel   string                 `json:"channel,omitempty" jsonschema:"lark 或 wework; 默认 lark"`
 	Webhook   string                 `json:"webhook,omitempty" jsonschema:"群机器人 Webhook 完整地址; action=webhook 时必填"`
 	Params    map[string]string      `json:"params,omitempty" jsonschema:"预置执行参数, 包含过滤器或任意 URL query 参数"`
