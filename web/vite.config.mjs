@@ -66,7 +66,7 @@ export default ({ mode }) => {
     build: {
       outDir: 'dist',
       emptyOutDir: true,
-      // monaco-editor 单库即 ~3.3MB(已独立 vendor chunk 且懒加载), 提高阈值避免噪音
+      // Monaco / ECharts 保持按路由加载，不进入控制台首屏依赖。
       chunkSizeWarningLimit: 3500,
       rollupOptions: {
         input: {
@@ -75,11 +75,17 @@ export default ({ mode }) => {
         },
         output: {
           // 把重型库拆成独立 vendor chunk: 按需加载 + 浏览器长期缓存
-          manualChunks: {
-            monaco: ['monaco-editor'],
-            echarts: ['echarts'],
-            'element-plus': ['element-plus', '@element-plus/icons-vue'],
-            vue: ['vue', 'vue-router']
+          manualChunks(id) {
+            // Vite 的预加载辅助代码被首屏和懒加载路由共用；若落进 Monaco
+            // chunk，入口会反向依赖整个编辑器，导致登录页也下载它。
+            if (id.includes('vite/preload-helper') || id.includes('commonjsHelpers') ||
+                id.includes('plugin-vue:export-helper')) return 'runtime'
+            if (id.includes('/node_modules/monaco-editor/')) return 'monaco'
+            if (id.includes('/node_modules/echarts/') || id.includes('/node_modules/zrender/')) return 'echarts'
+            if (id.includes('/node_modules/element-plus/') ||
+                id.includes('/node_modules/@element-plus/icons-vue/')) return 'element-plus'
+            if (id.includes('/node_modules/vue/') || id.includes('/node_modules/vue-router/') ||
+                id.includes('/node_modules/@vue/')) return 'vue'
           }
         }
       }
